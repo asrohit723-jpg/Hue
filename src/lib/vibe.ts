@@ -113,6 +113,7 @@ export interface DeviationRow {
   checked_sr_id: string | null;
   evidence: Array<{ at: string; who: string; quote: string; isViolation: boolean }>;
   caller_name?: string | null;
+  caller_phone?: string | null;
   site_hint?: string | null;
   started_at?: string;
   cmms_sr_id?: string | null;
@@ -260,6 +261,7 @@ export type DeviationWithEvidence = Deviation & {
   checkedSrId: string | null;
   detectedBy: string;
   callerName: string | null;
+  callerPhone: string | null;
   siteHint: string | null;
   /** Start of the call this finding came from — the Overview filters on it. */
   startedAt: string | null;
@@ -272,6 +274,7 @@ function withExtras(d: DeviationRow): DeviationWithEvidence {
     checkedSrId: d.checked_sr_id ?? null,
     detectedBy: d.detected_by,
     callerName: d.caller_name ?? null,
+    callerPhone: d.caller_phone ?? null,
     siteHint: d.site_hint ?? null,
     startedAt: d.started_at ?? null,
   };

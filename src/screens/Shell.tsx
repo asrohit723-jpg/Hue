@@ -506,7 +506,9 @@ export function Shell({ me }: { me: CurrentUser }) {
               onOpenDeviation={openDeviation}
             />
           )}
-          {screen === 'ints' && <Interventions onOpen={openDeviation} />}
+          {screen === 'ints' && (
+            <Interventions onOpen={openDeviation} onBrowseCalls={() => setScreen('convos')} />
+          )}
           {screen === 'int' && deviationId && (
             <InterventionDetail
               deviationId={deviationId}
