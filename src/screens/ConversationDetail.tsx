@@ -5,16 +5,11 @@ import {
   type DeviationWithEvidence,
   type TurnWithToolIO,
 } from '../lib/vibe';
-import { runSemanticSuite } from '../lib/judges';
+import { runSemanticCriterion, SEMANTIC_CRITERIA } from '../lib/judges';
 import { BootSkeleton } from './BootSkeleton';
 import { LoadError } from '../components/Chrome';
 import criteriaSeed from '../../evals/criteria.seed.json';
 
-/**
- * Calls whose semantic criteria have already been graded in this page session.
- * Module-level so it survives remounts as the user moves between calls.
- */
-const gradedThisSession = new Set<string>();
 import { avatarColor, clock, duration, evalTone, initials, label, sentimentTone } from '../lib/tone';
 
 /**
@@ -139,38 +134,19 @@ export function ConversationDetail({
   const [error, setError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
   const [tab, setTab] = useState<QualityTab>('score');
+  const [grading, setGrading] = useState<string | null>(null);
+  const [gradeSummary, setGradeSummary] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setData(null);
       setError(null);
+      setGradeSummary(null);
       try {
         const res = await api.getConversation(id);
         if (cancelled) return;
         setData(res);
-
-        // Finish grading this call here, in the browser.
-        //
-        // The semantic judges cannot run inside a Studio Function: its fetch
-        // aborts at ~10s and the conformance judge measures 15-20s on a real
-        // transcript, so server-side it times out and records nothing. Run from
-        // here — the same place the correction-loop judges already run — it has
-        // no ceiling. Only the model call is here; the server still supplies
-        // the context and still validates and writes the verdict.
-        //
-        // Once per call per page load: a passing verdict is not stored (there
-        // is no table to store it in, and the DB role cannot create one), so
-        // "ungraded" and "graded, passed" are indistinguishable on reload. The
-        // guard keeps a revisit within a session from re-billing the model.
-        if (!gradedThisSession.has(id)) {
-          gradedThisSession.add(id);
-          await runSemanticSuite(id);
-          if (cancelled) return;
-          // Re-read so any new finding appears in the evaluation panel.
-          const fresh = await api.getConversation(id);
-          if (!cancelled) setData(fresh);
-        }
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
       }
@@ -179,6 +155,49 @@ export function ConversationDetail({
       cancelled = true;
     };
   }, [id, nonce]);
+
+  /**
+   * Grade this call's semantic criteria — only when asked.
+   *
+   * This used to run automatically on open, which meant simply browsing the app
+   * changed the finding count and the compliance score underneath you. Grading
+   * is a real, model-driven write; it belongs behind an explicit action so the
+   * numbers hold still between deliberate runs.
+   *
+   * The judges run in the browser because a Studio Function's fetch aborts at
+   * ~10s and the conformance judge takes 15-20s on a real transcript. Only the
+   * model call is here — the server supplies the context and re-validates every
+   * verdict before it becomes a finding.
+   */
+  async function runEvals() {
+    setGradeSummary(null);
+    try {
+      const runs = [];
+      for (const criterionId of SEMANTIC_CRITERIA) {
+        setGrading(criterionId);
+        runs.push(await runSemanticCriterion(id, criterionId));
+      }
+      const failed = runs.filter((r) => r.verdict === 'fail').length;
+      const retracted = runs.filter((r) => r.retracted).length;
+      const unavailable = runs.filter((r) => r.verdict === 'unavailable').length;
+      setGradeSummary(
+        [
+          `${runs.length - unavailable} of ${runs.length} criteria graded`,
+          failed ? `${failed} failed` : 'none failed',
+          retracted ? `${retracted} retracted` : null,
+          // A judge that never answered is UNKNOWN, never a pass — say so.
+          unavailable ? `${unavailable} could not be reached` : null,
+        ]
+          .filter(Boolean)
+          .join(' · '),
+      );
+      setNonce((n) => n + 1);
+    } catch (err) {
+      setGradeSummary(err instanceof Error ? err.message : String(err));
+    } finally {
+      setGrading(null);
+    }
+  }
 
   if (error) {
     return (
@@ -246,6 +265,9 @@ export function ConversationDetail({
             {c.site ?? 'Site not resolved'} · {clock(c.startedAt)} · {duration(c.durationSec)}
             {/* The phone is the heading when there is no name — don't repeat it. */}
             {c.caller.name && c.caller.phone ? ` · ${c.caller.phone}` : ''}
+            {gradeSummary && (
+              <span style={{ color: 'var(--blue-600)', fontWeight: 500 }}> · {gradeSummary}</span>
+            )}
           </p>
         </div>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -261,6 +283,34 @@ export function ConversationDetail({
           >
             {label(c.evalStatus)}
           </span>
+          {/* Grading is a deliberate act, not a side effect of opening a call —
+              the count and the compliance score must hold still while browsing. */}
+          <button
+            onClick={runEvals}
+            disabled={Boolean(grading)}
+            title="Run the semantic judges against this call"
+            style={{
+              height: 36,
+              padding: '0 14px',
+              borderRadius: 4,
+              border: '1px solid var(--border-default)',
+              background: '#fff',
+              color: grading ? 'var(--ink-500)' : 'var(--ink-900)',
+              fontWeight: 500,
+              fontSize: 13,
+              cursor: grading ? 'progress' : 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 7,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 11l3 3L22 4" />
+              <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+            </svg>
+            {grading ? `Grading ${grading}…` : 'Run evals'}
+          </button>
           {firstFinding && (
             <button
               onClick={() => onOpenDeviation(firstFinding.id)}
