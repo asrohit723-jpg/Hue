@@ -1,115 +1,98 @@
-# TODO — fully-live call flow (deferred)
+# Live call-log ingest — built, waiting on one config drop
 
-**Status: deferred by decision, not blocked by design.**
+**Status: code complete and deployed. Inert until the Channels endpoint is
+supplied. No code change is needed to switch it on.**
 
-Today Hue's transcripts are seeded into the app database (`demo/transcripts.json`
-→ `governance.ingestTranscript`) and joined to **real** CMMS service requests.
-The service-request half is already fully live: every check reads the record from
-`facilio-cmms` at call time, never a copy.
+Hue's service-request half is already fully live — every check reads the record
+from `facilio-cmms` at call time. The missing half is the transcript: pulling it
+automatically when a real call ends, instead of seeding it.
 
-The missing half is pulling the transcript automatically when a call ends, so a
-real phone call flows into Hue with no seeding step.
+That ingest now exists (`functions/callingest.ts`, function `callingest`, job
+`pull-call-logs`). It has **no host baked in** and will not invent one. Until
+configured, `poll` returns `{configured: false, missing: [...]}`, writes nothing,
+and leaves the seeded transcripts exactly as they are.
 
-## Why it isn't built
+## What I need from the platform team
 
-The connections catalog exposes no way to read a call log. Probed on
-2026-08-13 against Ocean's 3 (org 2935, US):
+Five values. Nothing else is outstanding.
 
-| Connection | Status | Actions found | Call-log read? |
+| # | Value | Example (AE, for shape only — this org is **US**) | Notes |
 |---|---|---|---|
-| `helpdesk-channels-tools` | ACTIVE (`service_token`) | `end-call` | No |
-| `facilio-helpdesk-copilot` | ACTIVE (`service_token`) | `list-contacts`, `fetch-tickets`, `create-scope` | No |
+| 1 | **Host** | `https://channels.facilio.ae` | US equivalent. Must be `https://` on port 443 — the sandbox rejects other ports and any private/loopback address. |
+| 2 | **List path** | `/api/logs?since={since}&status=completed` | Must support *listing calls newer than a timestamp*. `{since}` is substituted with the watermark. **This is the one piece the AE endpoints you had do not cover** — both were fetch-by-id only, and a poller cannot discover which ids are new from a by-id endpoint. If no list endpoint exists, a webhook on call-completed works instead and I'll switch the trigger. |
+| 3 | **Get path** | `/api/logs/{callId}` | Returns one call log including `transcription: [{performer, message}]`. `{callId}` is substituted. |
+| 4 | **Header name** | `x-integration-key` (or `x-client-key`) | Whichever the US service expects. |
+| 5 | **Key** | — | The value for that header. |
 
-`callLogId` is clearly a first-class concept — it is a required input on
-`helpdesk-channels-tools.end-call` and on
-`facilio-cmms-atom-tools.list-service-requests` — but nothing *reads* a call log.
+If the response envelope differs from AE's, that is already handled — the
+adapters accept `data` / `logs` / `callLogs` / a bare array for the list, and
+`transcription` at top level, under `data`, or under `callLog` for the detail.
 
-The underlying HTTP endpoints exist (in AE:
-`GET https://ae.atom.facilio.ai/api/assistant/calllog/{callId}` with
-`x-client-key`, and `https://channels.facilio.ae/api/logs/{callId}` with
-`x-integration-key`, returning a `transcription` array of
-`{performer, message}`). They are not surfaced through connections, and because
-both helpdesk connections authenticate with a server-side service token, no key
-is obtainable from the app side. Guessing a US hostname was explicitly avoided.
+## Switching it on
 
-## What would unblock it
-
-### Option A — preferred: add two read actions to `helpdesk-channels-tools`
-
-```
-get-call-log(callLogId)          -> { callId, startedAt, durationSec, caller,
-                                      status, transcription: [{performer, message}] }
-list-call-logs(since, status?)   -> [{ callLogId, endedAt, status }]
-```
-
-This needs **no credential work on Hue's side**. The function already reaches
-that connection through `process.system.CONNECTIONS_URL`, and the platform
-injects the service token — the same path the Claude judges use today, which is
-verified working. Implementation would then be roughly 40 lines (below).
-
-### Option B — raw HTTP from the function
-
-Requires all four:
-
-1. The US host + path equivalents of both AE endpoints.
-2. The exact header name and key value for each.
-3. Confirmation the host is public HTTPS on port 443 — the Studio Functions
-   sandbox rejects non-443 ports and private/loopback/metadata IPs.
-4. **A way to list new calls.** Both AE endpoints are fetch-by-id only. A
-   watermark poller cannot discover *which* ids are new from a by-id endpoint,
-   so this needs either a list endpoint or a webhook. Without it there is no
-   poller to build, whatever the credentials.
-
-The key would go in a vault `environment_variable` credential rather than in
-code, so the sandbox only ever sees a placeholder.
-
-## Implementation sketch (once either option lands)
-
-Watermark polling, in a scheduled job:
-
-```ts
-// functions/ingestcalls.ts
-server.addHandler({
-  name: 'poll',
-  description: 'Pull transcripts for calls completed since the watermark.',
-  parameters: { limit: { description: 'Max calls per run', type: 'number' } },
-  execute: async (args) => {
-    const db = connect();
-    // Watermark = newest call already stored. ISO-8601 UTC strings sort
-    // lexicographically, so MAX() is a valid high-water mark.
-    const since =
-      db.query("select max(started_at) as w from conversations where id <> '__seed__'")
-        .rows[0]?.w ?? '1970-01-01T00:00:00Z';
-
-    const calls = await channels('list-call-logs', { since, status: 'completed' });
-
-    let ingested = 0;
-    for (const c of (calls.data ?? []).slice(0, Number(args.limit) || 20)) {
-      // Idempotent on callId — a re-run replaces turns rather than duplicating.
-      const log = await channels('get-call-log', { callLogId: c.callLogId });
-      upsertConversation(db, log);          // reuse governance.ingestTranscript logic
-      ingested++;
-    }
-    return { since, ingested };
-  },
-});
-```
-
-Then schedule it. Note two platform constraints that shape this:
-
-- **Minimum interval is 15 minutes** (`intervalSeconds >= 900`), so this is
-  near-real-time, not instant. A webhook would be needed for instant.
-- **Scheduled jobs target the PROD function**, so the app must be promoted to
-  production first — a job on a preview-only app records every fire as failed
-  with "function not found".
+One command. No redeploy, no code change:
 
 ```sh
-facilio vibe jobs create pull-call-logs \
-  --function ingestcalls --handler poll \
-  --interval 900 --payload '{"limit":20}'
+facilio vibe jobs update pull-call-logs --payload '{
+  "limit": 20,
+  "host":       "https://<US-CHANNELS-HOST>",
+  "listPath":   "/api/logs?since={since}&status=completed",
+  "getPath":    "/api/logs/{callId}",
+  "headerName": "x-integration-key",
+  "key":        "<KEY>"
+}'
+
+facilio vibe jobs resume pull-call-logs
 ```
 
-After ingest, each new conversation runs through the existing pipeline unchanged:
-`governance.evaluate` (join + deterministic checks) then
-`governance.evaluateSemantic` per semantic criterion. Nothing downstream needs to
-change — the seeded and live paths converge at `ingestTranscript`.
+Verify before resuming — this reports what landed and never echoes the key:
+
+```sh
+facilio vibe function run callingest config --args '{"host":"…","listPath":"…","getPath":"…","headerName":"…","key":"…"}'
+facilio vibe function run callingest ingestOne --args '{"callId":"<a real call id>", …}'
+```
+
+`ingestOne` pulls exactly one call so you can confirm the shape end to end
+before letting the schedule run.
+
+## Two preconditions on the job
+
+- **The app must be promoted to production first.** Scheduled jobs target the
+  *prod* physical function; on a preview-only app every fire fails with
+  "function not found". The job is therefore created **paused** — resume it after
+  promotion.
+- **Minimum interval is 15 minutes** (`interval >= 900`). This is near-real-time,
+  not instant. A webhook would be needed for instant.
+
+## Where the key lives
+
+The CLI's `function create` has no `--env` flag, so config arrives as handler
+args via the job payload — stored platform-side, never in this repo or the
+bundle. `resolveConfig()` reads `process.env.CHANNELS_*` **first** and falls back
+to args, so if vault `environment_variable` credentials become available to Vibe
+functions, move the key there and delete it from the payload — no code change.
+
+## How it behaves once live
+
+1. Watermark = `MAX(started_at)` over stored conversations. ISO-8601 UTC strings
+   sort lexicographically, so this is a valid high-water mark.
+2. `poll` lists calls since the watermark, skips any `call_id` already stored,
+   and fetches each remaining one.
+3. Transcription turns are mapped to Hue's shape (`caller` / `agent` / `system`)
+   so a live transcript reads identically to a seeded one.
+4. Each call is upserted on `callId` — a replayed window updates rather than
+   duplicates.
+5. A call with no transcription is skipped and reported in `failed[]`, not
+   stored as an empty conversation.
+6. One bad call never aborts the batch.
+
+Then run `governance.evaluate` on each new conversation to join it to its real
+CMMS service request and run the deterministic checks, followed by
+`governance.evaluateSemantic` per semantic criterion. Nothing downstream
+changes — the seeded and live paths converge on the same tables.
+
+## Fallback
+
+The seeded transcripts in `demo/transcripts.json` remain the source of record
+until the live feed is on, and are unaffected by it. Ingest only ever adds calls
+the watermark has not seen.

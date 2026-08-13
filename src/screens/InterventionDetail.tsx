@@ -15,7 +15,41 @@ async function callFn<T>(handler: string, args: Record<string, unknown>): Promis
   return (await vibe.executeFunction('governance', handler, args)) as T;
 }
 
-type ActionState = { busy: string | null; error: string | null; result: string | null };
+/** Anything the judges return that the panel needs to render. */
+interface CorrectionOutcome {
+  stage?: string;
+  ok?: boolean;
+  error?: string | null;
+  retryable?: boolean;
+  rootCause?: string;
+  correctionId?: string;
+  target?: string;
+  title?: string;
+  cmmsAction?: unknown;
+  humanAction?: unknown;
+  state?: string;
+  appliedRecordId?: string | null;
+  alreadyApplied?: boolean;
+  verified?: boolean;
+}
+
+type ActionState = {
+  busy: string | null;
+  /** A hard failure: bad data, unusable verdict, or a thrown handler error. */
+  error: string | null;
+  /**
+   * A judge that never finished. Held separately from `error` because the
+   * meaning is different — nothing was learned, so the honest state is
+   * "unknown, try again", not "no problem found".
+   */
+  timeout: string | null;
+  outcome: CorrectionOutcome | null;
+};
+
+const IDLE: ActionState = { busy: null, error: null, timeout: null, outcome: null };
+
+/** The function tags an unfinished judge with this prefix. */
+const JUDGE_TIMEOUT = 'JUDGE_TIMEOUT';
 
 export function InterventionDetail({
   deviationId,
@@ -31,7 +65,7 @@ export function InterventionDetail({
   const [record, setRecord] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
-  const [act, setAct] = useState<ActionState>({ busy: null, error: null, result: null });
+  const [act, setAct] = useState<ActionState>(IDLE);
 
   useEffect(() => {
     let cancelled = false;
@@ -56,13 +90,38 @@ export function InterventionDetail({
   }, [deviationId, nonce]);
 
   async function run(handler: string, args: Record<string, unknown>, verb: string) {
-    setAct({ busy: verb, error: null, result: null });
+    setAct({ ...IDLE, busy: verb });
     try {
-      const res = await callFn<Record<string, unknown>>(handler, args);
-      setAct({ busy: null, error: null, result: JSON.stringify(res, null, 2) });
+      const res = await callFn<CorrectionOutcome>(handler, args);
+
+      // runCorrection reports failure in its RESULT rather than throwing, so a
+      // successful call can still describe an unfinished judge. Read the body,
+      // never just the absence of an exception.
+      if (res && res.ok === false) {
+        const msg = String(res.error ?? 'The step did not complete.');
+        setAct({
+          busy: null,
+          timeout: res.retryable ? msg : null,
+          error: res.retryable ? null : msg,
+          // Keep whatever did succeed — a stage-1 result survives a stage-2 timeout.
+          outcome: res,
+        });
+        setNonce((n) => n + 1);
+        return;
+      }
+
+      setAct({ busy: null, error: null, timeout: null, outcome: res ?? null });
       setNonce((n) => n + 1);
     } catch (err) {
-      setAct({ busy: null, error: err instanceof Error ? err.message : String(err), result: null });
+      // Handlers that still throw (classify/propose/approve) land here.
+      const msg = err instanceof Error ? err.message : String(err);
+      const isTimeout = msg.includes(JUDGE_TIMEOUT) || /abort|timed? ?out/i.test(msg);
+      setAct({
+        busy: null,
+        timeout: isTimeout ? msg : null,
+        error: isTimeout ? null : msg,
+        outcome: null,
+      });
     }
   }
 
@@ -146,39 +205,113 @@ export function InterventionDetail({
                 create two records.
               </p>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <Button onClick={() => run('classifyRootCause', { deviationId: dev.id }, 'classify')} disabled={Boolean(act.busy)}>
-                  {act.busy === 'classify' ? 'Classifying…' : 'Classify root cause'}
+                <Button
+                  primary
+                  onClick={() => run('runCorrection', { deviationId: dev.id }, 'analyse')}
+                  disabled={Boolean(act.busy)}
+                >
+                  {act.busy === 'analyse'
+                    ? 'Analysing…'
+                    : act.timeout
+                      ? 'Retry analysis'
+                      : 'Classify & draft fix'}
                 </Button>
-                <Button onClick={() => run('proposeCorrection', { deviationId: dev.id }, 'propose')} disabled={Boolean(act.busy)}>
-                  {act.busy === 'propose' ? 'Drafting…' : 'Propose correction'}
-                </Button>
-                <Button primary onClick={() => run('approveCorrection', { correctionId: `CO-${dev.id}` }, 'approve')} disabled={Boolean(act.busy)}>
+                <Button
+                  onClick={() => run('approveCorrection', { correctionId: `CO-${dev.id}` }, 'approve')}
+                  disabled={Boolean(act.busy)}
+                >
                   {act.busy === 'approve' ? 'Applying…' : 'Approve & apply'}
                 </Button>
-                <Button onClick={() => run('verifyCorrection', { correctionId: `CO-${dev.id}` }, 'verify')} disabled={Boolean(act.busy)}>
+                <Button
+                  onClick={() => run('verifyCorrection', { correctionId: `CO-${dev.id}` }, 'verify')}
+                  disabled={Boolean(act.busy)}
+                >
                   {act.busy === 'verify' ? 'Verifying…' : 'Verify'}
                 </Button>
               </div>
 
+              {/* Timeout: nothing was learned. Never rendered as a pass, and
+                  never left blank — the only honest read is "unknown, retry". */}
+              {act.timeout && (
+                <div
+                  style={{
+                    marginTop: 14,
+                    background: 'var(--warning-050)',
+                    border: '1px solid var(--warning-500)',
+                    borderRadius: 6,
+                    padding: '12px 14px',
+                  }}
+                >
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--warning-700)" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="9" />
+                      <path d="M12 7v5l3 2" />
+                    </svg>
+                    <span style={{ fontWeight: 600, color: 'var(--warning-700)' }}>
+                      Couldn't complete — the judge timed out
+                    </span>
+                  </div>
+                  <p style={{ margin: '6px 0 0', fontSize: 13, color: 'var(--warning-700)', lineHeight: '19px', textWrap: 'pretty' }}>
+                    The model did not respond within the platform's request limit, after three
+                    attempts. <strong>This is not a verdict</strong> — nothing has been decided about
+                    this finding, and nothing was written. Retry, or leave it and come back.
+                    {act.outcome?.rootCause && (
+                      <> The root cause was classified as <strong>{act.outcome.rootCause}</strong> before the timeout, and that part is saved.</>
+                    )}
+                  </p>
+                  <div style={{ marginTop: 10 }}>
+                    <Button primary onClick={() => run('runCorrection', { deviationId: dev.id }, 'analyse')} disabled={Boolean(act.busy)}>
+                      Retry
+                    </Button>
+                  </div>
+                  <details style={{ marginTop: 10 }}>
+                    <summary style={{ fontSize: 12, color: 'var(--warning-700)', cursor: 'pointer' }}>
+                      Technical detail
+                    </summary>
+                    <p style={{ margin: '6px 0 0', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--warning-700)', wordBreak: 'break-word' }}>
+                      {act.timeout}
+                    </p>
+                  </details>
+                </div>
+              )}
+
+              {/* A genuine failure — bad data or an unusable verdict. */}
               {act.error && (
-                <div style={{ marginTop: 14, background: 'var(--danger-050)', border: '1px solid var(--danger-500)', borderRadius: 6, padding: '10px 12px' }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--danger-700)' }}>That step failed</div>
-                  <p style={{ margin: '4px 0 0', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--danger-700)', wordBreak: 'break-word' }}>
+                <div style={{ marginTop: 14, background: 'var(--danger-050)', border: '1px solid var(--danger-500)', borderRadius: 6, padding: '12px 14px' }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--danger-700)' }}>That step failed</div>
+                  <p style={{ margin: '6px 0 0', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--danger-700)', wordBreak: 'break-word' }}>
                     {act.error}
                   </p>
                 </div>
               )}
 
-              {act.result && (
-                <pre
-                  style={{
-                    marginTop: 14, background: 'var(--ink-050)', borderRadius: 6, padding: 12,
-                    fontFamily: 'var(--font-mono)', fontSize: 11, lineHeight: '17px',
-                    overflowX: 'auto', maxHeight: 320,
-                  }}
-                >
-                  {act.result}
-                </pre>
+              {/* Success. */}
+              {act.outcome && act.outcome.ok !== false && (
+                <div style={{ marginTop: 14, background: 'var(--success-050)', border: '1px solid var(--success-400)', borderRadius: 6, padding: '12px 14px' }}>
+                  <div style={{ fontWeight: 600, color: 'var(--success-700)' }}>
+                    {act.outcome.stage === 'complete'
+                      ? 'Correction drafted'
+                      : act.outcome.state === 'applied'
+                        ? act.outcome.alreadyApplied
+                          ? 'Already applied — no second write'
+                          : 'Applied to the CMMS'
+                        : act.outcome.verified
+                          ? 'Verified against the live record'
+                          : 'Done'}
+                  </div>
+                  <div style={{ marginTop: 6, fontSize: 13, color: 'var(--ink-900)', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {act.outcome.rootCause && <span>Root cause: <strong>{act.outcome.rootCause}</strong></span>}
+                    {act.outcome.target && <span>Fix belongs in: <strong>{act.outcome.target}</strong></span>}
+                    {act.outcome.title && <span>{act.outcome.title}</span>}
+                    {act.outcome.appliedRecordId && <span>Record: SR {act.outcome.appliedRecordId}</span>}
+                  </div>
+                  <details style={{ marginTop: 10 }}>
+                    <summary style={{ fontSize: 12, color: 'var(--ink-600)', cursor: 'pointer' }}>Full response</summary>
+                    <pre style={{ margin: '8px 0 0', background: 'var(--ink-050)', borderRadius: 6, padding: 12, fontFamily: 'var(--font-mono)', fontSize: 11, lineHeight: '17px', overflowX: 'auto', maxHeight: 280 }}>
+                      {JSON.stringify(act.outcome, null, 2)}
+                    </pre>
+                  </details>
+                </div>
               )}
             </div>
           </Panel>

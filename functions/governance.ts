@@ -102,22 +102,40 @@ async function aiStudio(actionSlug: string, input: Record<string, unknown>): Pro
  * There is no sleep between attempts: the sandbox has no timers, and each
  * attempt already takes seconds, which is the backoff.
  */
+/**
+ * Marker prefix on a thrown message so the UI can tell a timeout (retryable,
+ * nothing is known) from a real failure (bad data, unusable verdict). Both are
+ * errors — neither is ever a pass — but they warrant different wording and
+ * different affordances in front of a user.
+ */
+export const JUDGE_TIMEOUT = 'JUDGE_TIMEOUT';
+
+/** The sandbox reports its fetch ceiling as an abort. */
+function isTimeout(message: string): boolean {
+  return /abort|timed? ?out|ETIMEDOUT/i.test(message);
+}
+
 async function runJudgeWithRetry(
   agentLinkName: string,
   message: string,
   attempts = 3,
 ): Promise<any> {
   let lastError = '';
+  let sawTimeout = false;
   for (let i = 0; i < attempts; i++) {
     try {
       return await runJudge(agentLinkName, message);
     } catch (err) {
       lastError = err instanceof Error ? err.message : String(err);
+      if (isTimeout(lastError)) sawTimeout = true;
       console.log(`judge ${agentLinkName} attempt ${i + 1}/${attempts} failed: ${lastError}`);
     }
   }
+  // Tagged so the caller can render "couldn't complete, retry" rather than a
+  // generic failure — and so nothing downstream can mistake this for a verdict.
   throw new Error(
-    `Judge ${agentLinkName} failed after ${attempts} attempts — treat as UNKNOWN, not as pass. Last error: ${lastError}`,
+    `${sawTimeout ? JUDGE_TIMEOUT + ': ' : ''}Judge ${agentLinkName} did not complete after ` +
+      `${attempts} attempts — treat as UNKNOWN, never as pass. Last error: ${lastError}`,
   );
 }
 
@@ -863,8 +881,44 @@ server.addHandler({
 const ROOT_CAUSE_AGENT = 'root-cause-classifier_4b48798f3211425e98520e3056ab02b4';
 const PROPOSER_AGENT = 'correction-proposer_4b48798f3211425e98520e3056ab02b4';
 
+/**
+ * Request-scoped memo for CMMS records.
+ *
+ * This is NOT a cache of ground truth. It lives for one handler invocation and
+ * dies with it, so a record is fetched at most once per request instead of once
+ * per judge. Nothing is persisted — the next request reads the CMMS again, which
+ * is the rule: a check never reads a stored copy.
+ */
+function makeRecordMemo() {
+  const seen: Record<string, any> = {};
+  return async function record(srId: string | null | undefined): Promise<any> {
+    const key = String(srId ?? '');
+    if (!key) return null;
+    if (Object.prototype.hasOwnProperty.call(seen, key)) return seen[key];
+    const payload = await cmms('list-service-requests', {
+      page_size: 1,
+      page: 1,
+      expand: 'site,requester',
+      filters: `id(equals)=${key}`,
+    });
+    const r = rowsOf(payload)[0] ?? null;
+    seen[key] = r
+      ? {
+          id: r.id,
+          subject: r.subject,
+          description: r.description,
+          site: r.site?.name ?? null,
+          siteId: r.site?.id ?? null,
+          urgency: r.urgency ?? null,
+          status: r.moduleState ?? null,
+        }
+      : null;
+    return seen[key];
+  };
+}
+
 /** Gather one deviation with its call, turns and the LIVE record it was checked against. */
-async function deviationContext(db: any, deviationId: string) {
+async function deviationContext(db: any, deviationId: string, memo?: (id: string | null) => Promise<any>) {
   const dev = db.query('select * from deviations where id = $1 limit 1', [deviationId]).rows[0];
   if (!dev) throw new Error(`No deviation ${deviationId}`);
   const convo = db.query('select * from conversations where id = $1 limit 1', [
@@ -875,27 +929,9 @@ async function deviationContext(db: any, deviationId: string) {
     [dev.conversation_id],
   ).rows;
 
-  let cmmsRecord: any = null;
-  if (convo?.cmms_sr_id) {
-    const payload = await cmms('list-service-requests', {
-      page_size: 1,
-      page: 1,
-      expand: 'site,requester',
-      filters: `id(equals)=${convo.cmms_sr_id}`,
-    });
-    const r = rowsOf(payload)[0];
-    if (r) {
-      cmmsRecord = {
-        id: r.id,
-        subject: r.subject,
-        description: r.description,
-        site: r.site?.name ?? null,
-        siteId: r.site?.id ?? null,
-        urgency: r.urgency ?? null,
-        status: r.moduleState ?? null,
-      };
-    }
-  }
+  // One fetch per request, shared across every judge in this invocation.
+  const fetchRecord = memo ?? makeRecordMemo();
+  const cmmsRecord = await fetchRecord(convo?.cmms_sr_id ?? null);
 
   const transcript = turns.map((t: any) => ({
     performer: t.performer,
@@ -986,18 +1022,21 @@ server.addHandler({
     const cmmsAction = JSON.stringify(verdict.cmmsAction ?? {});
     const prior = db.query('select id from corrections where id = $1 limit 1', [corrId]).rows[0];
 
+    // before_text is stored empty: the proposer is no longer asked to echo the
+    // current text back, since quoting input we already hold cost output tokens
+    // against a hard request ceiling for no information gain.
     if (prior) {
       db.query(
-        `update corrections set target=$2, title=$3, rationale=$4, before_text=$5, after_text=$6,
-           cmms_action=$7, state='proposed' where id=$1`,
+        `update corrections set target=$2, title=$3, rationale=$4, before_text='', after_text=$5,
+           cmms_action=$6, recommended_action=$7, state='proposed' where id=$1`,
         [
           corrId,
           target,
           String(verdict.title ?? ''),
           String(verdict.rationale ?? ''),
-          String(verdict.beforeText ?? ''),
           String(verdict.afterText ?? ''),
           cmmsAction,
+          String(verdict.humanTask ?? ''),
         ],
       );
     } else {
@@ -1005,17 +1044,15 @@ server.addHandler({
         `insert into corrections
            (id, deviation_id, target, title, rationale, before_text, after_text, state,
             recommended_action, assignee, cmms_action, proposed_at)
-         values ($1,$2,$3,$4,$5,$6,$7,'proposed',$8,$9,$10,$11)`,
+         values ($1,$2,$3,$4,$5,'',$6,'proposed',$7,'',$8,$9)`,
         [
           corrId,
           id,
           target,
           String(verdict.title ?? ''),
           String(verdict.rationale ?? ''),
-          String(verdict.beforeText ?? ''),
           String(verdict.afterText ?? ''),
-          String(verdict.humanAction?.action ?? ''),
-          String(verdict.humanAction?.assigneeRole ?? ''),
+          String(verdict.humanTask ?? ''),
           cmmsAction,
           nowIso(),
         ],
@@ -1029,7 +1066,7 @@ server.addHandler({
       target,
       title: verdict.title ?? '',
       cmmsAction: verdict.cmmsAction ?? null,
-      humanAction: verdict.humanAction ?? null,
+      humanTask: verdict.humanTask ?? '',
       state: 'proposed',
     };
   },
@@ -1130,9 +1167,9 @@ server.addHandler({
       }
       const created = await cmms('create-service-request', {
         servicerequest: {
-          subject: String(action.subject ?? corr.title ?? 'Raised by Hue governance').slice(0, 255),
+          subject: String(corr.title || 'Raised by Hue governance').slice(0, 255),
           description:
-            `${String(action.why ?? corr.rationale ?? '')}\n\n` +
+            `${String(corr.rationale ?? '')}\n\n` +
             `Raised by Hue from call ${convo.call_id}: the agent confirmed this request to the caller but no record existed.`.slice(
               0,
               2000,
@@ -1204,6 +1241,122 @@ server.addHandler({
       verified: exists,
       record: record ? { id: record.id, subject: record.subject, urgency: record.urgency } : null,
     };
+  },
+});
+
+server.addHandler({
+  name: 'runCorrection',
+  description:
+    'Classify the root cause and draft a correction in one pass, fetching the CMMS record once and reusing it for both judges. Returns partial progress if the second judge times out.',
+  parameters: { deviationId: { description: 'Deviation id', type: 'string' } },
+  execute: async (args) => {
+    const db = connect();
+    const id = String(args.deviationId ?? '').trim();
+    // One memo for the whole request: the record is read once, both judges see
+    // the same live snapshot, and nothing is persisted.
+    const memo = makeRecordMemo();
+    const { dev, transcript, cmmsRecord } = await deviationContext(db, id, memo);
+
+    const base = {
+      id: dev.id,
+      criterionId: dev.criterion_id,
+      clauseRef: dev.clause_ref,
+      summary: dev.summary,
+      severity: dev.severity,
+      evidence: JSON.parse(dev.evidence || '[]'),
+    };
+    const keyTurns = transcript.slice(-6);
+
+    // --- Stage 1: root cause -------------------------------------------------
+    // Fetches are serialized by the platform, so these run one after another
+    // whatever we do. Each stage is reported independently so a stage-2 timeout
+    // never discards a successful stage 1.
+    let rootCause = '';
+    let classifyError: string | null = null;
+    try {
+      const { verdict } = await runJudgeWithRetry(
+        ROOT_CAUSE_AGENT,
+        JSON.stringify({ deviation: base, keyTurns, cmmsRecord }),
+      );
+      const rc = String(verdict?.rootCause ?? '');
+      if (['agent', 'data', 'sow', 'unknown'].indexOf(rc) >= 0) {
+        rootCause = rc;
+        db.query('update deviations set root_cause=$2 where id=$1', [id, rc]);
+      } else {
+        classifyError = `Classifier returned an unusable rootCause: ${rc}`;
+      }
+    } catch (err) {
+      classifyError = err instanceof Error ? err.message : String(err);
+    }
+
+    if (!rootCause) {
+      return {
+        deviationId: id,
+        stage: 'classify',
+        ok: false,
+        error: classifyError,
+        retryable: String(classifyError ?? '').indexOf(JUDGE_TIMEOUT) === 0,
+      };
+    }
+
+    // --- Stage 2: proposal ---------------------------------------------------
+    try {
+      const { verdict } = await runJudgeWithRetry(
+        PROPOSER_AGENT,
+        JSON.stringify({ deviation: { ...base, rootCause }, keyTurns, cmmsRecord }),
+      );
+      const target = String(verdict?.target ?? '');
+      if (['prompt', 'mapping', 'sow', 'human'].indexOf(target) < 0) {
+        throw new Error(`Proposer returned an unusable target: ${target}`);
+      }
+
+      const corrId = `CO-${id}`;
+      const cmmsAction = JSON.stringify(verdict.cmmsAction ?? {});
+      const prior = db.query('select id from corrections where id = $1 limit 1', [corrId]).rows[0];
+      if (prior) {
+        db.query(
+          `update corrections set target=$2, title=$3, rationale=$4, before_text='', after_text=$5,
+             cmms_action=$6, recommended_action=$7, state='proposed' where id=$1`,
+          [corrId, target, String(verdict.title ?? ''), String(verdict.rationale ?? ''),
+           String(verdict.afterText ?? ''), cmmsAction, String(verdict.humanTask ?? '')],
+        );
+      } else {
+        db.query(
+          `insert into corrections
+             (id, deviation_id, target, title, rationale, before_text, after_text, state,
+              recommended_action, assignee, cmms_action, proposed_at)
+           values ($1,$2,$3,$4,$5,'',$6,'proposed',$7,'',$8,$9)`,
+          [corrId, id, target, String(verdict.title ?? ''), String(verdict.rationale ?? ''),
+           String(verdict.afterText ?? ''), String(verdict.humanTask ?? ''),
+           cmmsAction, nowIso()],
+        );
+      }
+      db.query("update deviations set status='correcting' where id=$1", [id]);
+
+      return {
+        deviationId: id,
+        stage: 'complete',
+        ok: true,
+        rootCause,
+        correctionId: corrId,
+        target,
+        title: verdict.title ?? '',
+        cmmsAction: verdict.cmmsAction ?? null,
+        humanTask: verdict.humanTask ?? '',
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // Stage 1 succeeded and is already persisted — report it rather than
+      // throwing the whole pass away.
+      return {
+        deviationId: id,
+        stage: 'propose',
+        ok: false,
+        rootCause,
+        error: message,
+        retryable: message.indexOf(JUDGE_TIMEOUT) === 0,
+      };
+    }
   },
 });
 
