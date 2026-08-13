@@ -1,4 +1,7 @@
 import { api, vibe } from './vibe';
+import { SEMANTIC_CRITERIA } from './criteria';
+
+export { SEMANTIC_CRITERIA };
 
 /**
  * Client-side judge runners.
@@ -148,13 +151,6 @@ export async function judgeConformance(input: {
   return v;
 }
 
-/** Every criterion graded by a model rather than by code. */
-export const SEMANTIC_CRITERIA = [
-  'CR-LOG-01',
-  'CR-LOG-04',
-  'CR-SCHED-01',
-  'CR-CAT-01',
-] as const;
 
 export interface SemanticRun {
   criterionId: string;

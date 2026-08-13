@@ -247,10 +247,17 @@ function agentClaim(turns: Array<{ performer: string; message: string; at_offset
 /** The connection's satisfactionLevel, mapped onto Hue's sentiment enum. */
 function toSentiment(level: unknown): string {
   const s = String(level ?? '').toUpperCase();
-  if (s.includes('VERY_DISSATISFIED') || s.includes('ANGRY')) return 'distressed';
-  if (s.includes('DISSATISFIED') || s.includes('FRUSTRAT')) return 'frustrated';
-  if (s.includes('SATISFIED') || s.includes('HAPPY')) return 'happy';
-  if (s) return 'neutral';
+  // Order matters: VERY_DISSATISFIED contains DISSATISFIED, which contains
+  // SATISFIED. A looser test earlier in the chain reads the worst calls as the
+  // happiest ones.
+  if (s.includes('VERY_DISSATISFIED') || s.includes('ANGRY') || s.includes('DISTRESS'))
+    return 'distressed';
+  if (s.includes('DISSATISFIED') || s.includes('FRUSTRAT') || s.includes('CONCERNED'))
+    return 'frustrated';
+  if (s.includes('SATISFIED') || s.includes('HAPPY') || s.includes('PLEASED')) return 'happy';
+  if (s.includes('NEUTRAL')) return 'neutral';
+  // An unrecognised level is NOT neutral — neutral is a real reading. Leave it
+  // empty so the UI shows "Unknown" rather than inventing calm.
   return '';
 }
 
@@ -263,20 +270,6 @@ function toSentiment(level: unknown): string {
  * forbids — the judges are reached as connection actions on facilio-ai-studio,
  * over the CONNECTIONS_URL the platform does provide.
  */
-async function aiStudio(actionSlug: string, input: Record<string, unknown>): Promise<any> {
-  const res = await fetch(
-    `${process.system.CONNECTIONS_URL}/api/v1/connections/facilio-ai-studio/actions/${actionSlug}/execute`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ input }),
-    },
-  );
-  if (!res.ok) {
-    throw new Error(`AI Studio ${actionSlug} failed: ${res.status} ${res.statusText}`);
-  }
-  return await res.json();
-}
 
 /**
  * Run one judge and return its parsed verdict.
@@ -298,81 +291,10 @@ async function aiStudio(actionSlug: string, input: Record<string, unknown>): Pro
  * There is no sleep between attempts: the sandbox has no timers, and each
  * attempt already takes seconds, which is the backoff.
  */
-/**
- * Marker prefix on a thrown message so the UI can tell a timeout (retryable,
- * nothing is known) from a real failure (bad data, unusable verdict). Both are
- * errors — neither is ever a pass — but they warrant different wording and
- * different affordances in front of a user.
- */
-export const JUDGE_TIMEOUT = 'JUDGE_TIMEOUT';
 
 /** The sandbox reports its fetch ceiling as an abort. */
-function isTimeout(message: string): boolean {
-  return /abort|timed? ?out|ETIMEDOUT/i.test(message);
-}
 
-async function runJudgeWithRetry(
-  agentLinkName: string,
-  message: string,
-  attempts = 3,
-): Promise<any> {
-  let lastError = '';
-  let sawTimeout = false;
-  for (let i = 0; i < attempts; i++) {
-    try {
-      return await runJudge(agentLinkName, message);
-    } catch (err) {
-      lastError = err instanceof Error ? err.message : String(err);
-      if (isTimeout(lastError)) sawTimeout = true;
-      console.log(`judge ${agentLinkName} attempt ${i + 1}/${attempts} failed: ${lastError}`);
-    }
-  }
-  // Tagged so the caller can render "couldn't complete, retry" rather than a
-  // generic failure — and so nothing downstream can mistake this for a verdict.
-  throw new Error(
-    `${sawTimeout ? JUDGE_TIMEOUT + ': ' : ''}Judge ${agentLinkName} did not complete after ` +
-      `${attempts} attempts — treat as UNKNOWN, never as pass. Last error: ${lastError}`,
-  );
-}
 
-async function runJudge(agentLinkName: string, message: string): Promise<any> {
-  const thread = await aiStudio('create-chat-thread', { agent: agentLinkName });
-  // Verified shape: { thread: { id, link_name, ... } }. The other spellings are
-  // kept as fallbacks so a wrapper change degrades to a clear error, not a crash.
-  const threadId =
-    thread?.thread?.id ??
-    thread?.data?.thread?.id ??
-    thread?.data?.id ??
-    thread?.id ??
-    null;
-  if (!threadId) {
-    throw new Error(`create-chat-thread returned no thread id: ${JSON.stringify(thread).slice(0, 300)}`);
-  }
-
-  const run = await aiStudio('run-agent-chat', {
-    threadId: Number(threadId),
-    agent: agentLinkName,
-    message,
-  });
-
-  // Verified shape: { content: "<json string>" }. Structured-output agents
-  // return content as a STRING, never a nested object — the parse below is
-  // required, not defensive.
-  const content =
-    run?.content ??
-    run?.data?.content ??
-    run?.response?.content ??
-    run?.data?.response?.content ??
-    null;
-  if (typeof content !== 'string') {
-    throw new Error(`Judge returned no string content: ${JSON.stringify(run).slice(0, 300)}`);
-  }
-  try {
-    return { verdict: JSON.parse(content), threadId };
-  } catch {
-    throw new Error(`Judge content was not valid JSON: ${content.slice(0, 300)}`);
-  }
-}
 
 /** Booleans round-trip as text through a CSV-inferred column. */
 const asBool = (v: unknown) => v === true || v === 'true';
@@ -1074,11 +996,20 @@ server.addHandler({
     // The call log's recording, when it has one. Surfaced so the player can say
     // whether a recording exists rather than implying one either way.
     let recordingFileId: number | null = null;
+    // The channel runs its own summariser after a call ends. That output is
+    // real AI work already done — reading it is not a new model call, and not
+    // reading it was simply discarding it.
+    let aiSummary: string | null = null;
+    let aiTags: string | null = null;
+    let satisfaction: string | null = null;
     if (isLive && convo.call_id) {
       try {
         const payload = await callLogs('get-call-log', { callLogId: Number(convo.call_id) });
         const rec = callRecordOf(payload);
         recordingFileId = Number(rec?.recordingFileId) || null;
+        aiSummary = rec?.summary ? String(rec.summary) : null;
+        aiTags = rec?.tags ? String(rec.tags) : null;
+        satisfaction = rec?.satisfactionLevel ? String(rec.satisfactionLevel) : null;
         const live = transcriptionOf(payload);
         if (live.length) {
           const startMs = Number(callRecordOf(payload)?.startTime ?? 0);
@@ -1131,6 +1062,9 @@ server.addHandler({
       turns,
       transcriptSource,
       recordingFileId,
+      aiSummary,
+      aiTags,
+      satisfaction,
       deviations: deviations.map((d: any) => ({ ...d, evidence: JSON.parse(d.evidence || '[]') })),
       cmmsRecord,
     };
@@ -1171,207 +1105,68 @@ const SEMANTIC_CRITERIA: Record<string, { clauseRef: string; requires: string }>
     requires:
       'The service request must be categorised and prioritised to match the fault the caller actually described, including any stated consequence or deadline.',
   },
+
+  // ---- The rest of the SOW's semantic criteria --------------------------
+  // Each was already written in evals/criteria.seed.json and marked
+  // `semantic`; none had a `requires` here, so nothing ever graded them. The
+  // wording below is the criterion's own title and description, tightened into
+  // an instruction and given the not-applicable case explicitly — a judge told
+  // only what failure looks like will find failure everywhere.
+  //
+  // Every one of these is a reading task. None replaces a deterministic check:
+  // record-exists, field-null, SLA clocks and category-in-list all stay in code.
+  'CR-LOG-06': {
+    clauseRef: 'S-2.4',
+    requires:
+      "The fault description on the service request must faithfully represent what the caller actually said about the symptom — their own words, not a rewrite that loses or changes the meaning. " +
+      'Fails where the record describes a different fault, drops the distinguishing detail, or generalises the symptom away. ' +
+      'Not applicable where no service request exists, or where the caller described no symptom.',
+  },
+  'CR-SCOPE-01': {
+    clauseRef: 'S-1.3',
+    requires:
+      'Scope covers building services only. Anything outside it — tenant-owned equipment, fit-out assets, personal property — must be redirected to the right party, NOT logged as a service request. ' +
+      'Fails where an out-of-scope item was logged anyway. ' +
+      'Not applicable where everything reported was in scope, or nothing was reported.',
+  },
+  'CR-SCOPE-02': {
+    clauseRef: 'S-1.4',
+    requires:
+      "Where the item is tenant-owned, the agent must refer the caller to the tenant's own vendor, and say so clearly enough that the caller knows who to contact next. " +
+      'Judge both calls: whether it really was tenant-owned, and whether the redirect was phrased so the caller can act on it. ' +
+      'Not applicable where nothing tenant-owned came up.',
+  },
+  'CR-ESC-02': {
+    clauseRef: 'S-5.2',
+    requires:
+      'Where the caller describes a genuine safety emergency — someone trapped, fire, flood, a live electrical hazard — the P1 escalation flow must start immediately, before routine data gathering. ' +
+      'Judge what the caller actually described, not the presence of an alarming word: "the lift is slow" is not entrapment. ' +
+      'Not applicable where no safety emergency was described.',
+  },
+  'CR-CALL-02': {
+    clauseRef: 'S-6.2',
+    requires:
+      'The agent must ask one question at a time. Fails where a single turn puts two or more distinct questions to the caller, leaving them to pick which to answer. ' +
+      'Count genuine questions, not question marks — a rephrasing of the same question is one question. ' +
+      'Not applicable to a call where the agent asked nothing.',
+  },
+  'CR-CALL-03': {
+    clauseRef: 'S-6.3',
+    requires:
+      'Where the caller is distressed, angry or frightened, the agent must acknowledge that before it starts gathering details. ' +
+      'Judge the caller\'s state from what they said and how they said it, and the agent\'s FIRST response to it. ' +
+      'Not applicable where the caller was calm throughout.',
+  },
+  'CR-SCHED-02': {
+    clauseRef: 'S-4.3',
+    requires:
+      'Where the caller states an access restriction — a gate code, a time the area cannot be entered, someone to ask for — it must be captured on the record in a form that preserves what they said. ' +
+      'Fails where the restriction is missing, or reworded into something that would mislead whoever attends. ' +
+      'Not applicable where the caller stated no access restriction.',
+  },
 };
 
-const JUDGE_AGENT = 'sow-conformance-judge_4b48798f3211425e98520e3056ab02b4';
 
-server.addHandler({
-  name: 'evaluateSemantic',
-  description:
-    'Grade ONE semantic criterion for one conversation with the Claude judge, against the live CMMS record. One judge call per invocation, because fetches are serialized and each model call is slow.',
-  parameters: {
-    conversationId: { description: 'Conversation id', type: 'string' },
-    criterionId: {
-      description: 'One of CR-LOG-01, CR-LOG-04, CR-SCHED-01, CR-CAT-01',
-      type: 'string',
-    },
-  },
-  execute: async (args) => {
-    const convoId = String(args.conversationId ?? '').trim();
-    const criterionId = String(args.criterionId ?? '').trim();
-    const criterion = SEMANTIC_CRITERIA[criterionId];
-    if (!criterion) throw new Error(`Unknown semantic criterion ${criterionId}`);
-
-    const db = connect();
-    const convo = db.query('select * from conversations where id = $1 limit 1', [convoId]).rows[0];
-    if (!convo) throw new Error(`No conversation ${convoId}`);
-
-    // Where the deterministic layer has already found this criterion failing,
-    // there is nothing for a judge to add — and both layers key their deviation
-    // on (conversation, criterion), so running anyway would overwrite exact
-    // evidence with a model's reading of it. This is what keeps CR-LOG-01's two
-    // halves from colliding: the semantic pass only speaks where the
-    // deterministic one stayed silent.
-    const alreadyDeterministic = db.query(
-      `select id from deviations
-        where conversation_id = $1 and criterion_id = $2 and detected_by = 'deterministic'
-        limit 1`,
-      [convoId, criterionId],
-    ).rows[0];
-    if (alreadyDeterministic) {
-      return {
-        conversationId: convoId,
-        criterionId,
-        verdict: 'already_caught',
-        recorded: false,
-        note: 'The deterministic check already found this criterion failing on this call.',
-      };
-    }
-
-    const turns = db.query(
-      'select * from transcript_turns where conversation_id = $1 order by turn_index',
-      [convoId],
-    ).rows;
-
-    // Ground truth, fetched live. The judge is told plainly that a null record
-    // means no record exists — not that the lookup was skipped.
-    let cmmsRecord: any = null;
-    if (convo.cmms_sr_id) {
-      const payload = await cmms('list-service-requests', {
-        page_size: 1,
-        page: 1,
-        expand: 'site,requester',
-        filters: `id(equals)=${convo.cmms_sr_id}`,
-      });
-      cmmsRecord = rowsOf(payload)[0] ?? null;
-    }
-
-    const transcript = turns.map((t: any) => ({
-      performer: t.performer,
-      at: t.at_offset,
-      message: t.tool_name
-        ? `TOOL ${t.tool_name} -> ${t.tool_status}${t.tool_args ? ` | args: ${t.tool_args}` : ''}${t.tool_result ? ` | result: ${t.tool_result}` : ''}${t.tool_error ? ` | error: ${t.tool_error}` : ''}`
-        : t.message,
-    }));
-
-    const record = cmmsRecord
-      ? {
-          id: cmmsRecord.id,
-          subject: cmmsRecord.subject,
-          description: cmmsRecord.description,
-          site: cmmsRecord.site?.name ?? null,
-          urgency: cmmsRecord.urgency ?? null,
-          status: cmmsRecord.moduleState ?? null,
-          createdTime: cmmsRecord.sysCreatedTime ?? null,
-        }
-      : null;
-
-    const message = JSON.stringify({
-      criterion: { id: criterionId, clauseRef: criterion.clauseRef, requires: criterion.requires },
-      transcript,
-      cmmsRecord: record,
-    });
-
-    const { verdict } = await runJudgeWithRetry(JUDGE_AGENT, message);
-
-    // A schema constrains shape, not truthfulness — validate before it writes.
-    const ok =
-      verdict &&
-      typeof verdict.verdict === 'string' &&
-      ['pass', 'fail', 'not_applicable'].indexOf(verdict.verdict) >= 0;
-    if (!ok) throw new Error(`Judge returned an unusable verdict: ${JSON.stringify(verdict).slice(0, 200)}`);
-
-    if (verdict.verdict !== 'fail') {
-      // Retract a finding this criterion no longer makes.
-      //
-      // Re-grading is normal — a judge is re-run after a timeout, or after the
-      // record it reads has changed — and without this a fail recorded once
-      // stays open for ever, even as the judge now passes the call. The
-      // deterministic layer retracts its own findings for the same reason.
-      //
-      // Scope matches that layer: only this criterion, only semantic findings,
-      // only while still open, and never one a correction has been proposed
-      // against, since deleting that would cascade the correction away.
-      const prior = db.query(
-        `select id from deviations
-          where conversation_id = $1 and criterion_id = $2
-            and detected_by = 'semantic' and status = 'open'
-          limit 1`,
-        [convoId, criterionId],
-      ).rows[0];
-
-      let retracted = false;
-      if (prior) {
-        const hasCorrection = db.query(
-          'select id from corrections where deviation_id = $1 limit 1',
-          [prior.id],
-        ).rows[0];
-        if (!hasCorrection) {
-          db.query('delete from deviations where id = $1', [prior.id]);
-          retracted = true;
-
-          // The call may have been the only thing keeping it flagged.
-          const openNow = Number(
-            db.query(
-              "select count(*) as n from deviations where conversation_id = $1 and status = 'open'",
-              [convoId],
-            ).rows[0]?.n ?? 0,
-          );
-          if (!openNow) {
-            db.query("update conversations set eval_status='passed' where id=$1", [convoId]);
-          }
-        }
-      }
-
-      return {
-        conversationId: convoId,
-        criterionId,
-        verdict: verdict.verdict,
-        recorded: false,
-        retracted,
-      };
-    }
-
-    const severity =
-      ['critical', 'high', 'medium', 'low'].indexOf(String(verdict.severity)) >= 0
-        ? String(verdict.severity)
-        : 'medium';
-
-    const prior = db.query(
-      'select id from deviations where conversation_id = $1 and criterion_id = $2 limit 1',
-      [convoId, criterionId],
-    ).rows[0];
-    const devId = prior?.id ?? `DV-${convoId}-${criterionId}`;
-    const evidence = JSON.stringify(Array.isArray(verdict.evidence) ? verdict.evidence : []);
-
-    if (prior) {
-      db.query(
-        `update deviations set summary=$2, severity=$3, checked_sr_id=$4, evidence=$5,
-           detected_by='semantic' where id=$1`,
-        [devId, String(verdict.summary ?? ''), severity, String(convo.cmms_sr_id ?? ''), evidence],
-      );
-    } else {
-      db.query(
-        `insert into deviations
-           (id, conversation_id, criterion_id, clause_ref, summary, severity, root_cause,
-            status, detected_at, detected_by, checked_sr_id, evidence)
-         values ($1,$2,$3,$4,$5,$6,'unknown','open',$7,'semantic',$8,$9)`,
-        [
-          devId,
-          convoId,
-          criterionId,
-          criterion.clauseRef,
-          String(verdict.summary ?? ''),
-          severity,
-          nowIso(),
-          String(convo.cmms_sr_id ?? ''),
-          evidence,
-        ],
-      );
-    }
-    db.query('update conversations set eval_status=$2 where id=$1', [convoId, 'flagged']);
-
-    return {
-      conversationId: convoId,
-      criterionId,
-      verdict: 'fail',
-      severity,
-      confidence: verdict.confidence ?? null,
-      summary: verdict.summary ?? '',
-      recorded: true,
-    };
-  },
-});
 
 const ROOT_CAUSE_AGENT = 'root-cause-classifier_4b48798f3211425e98520e3056ab02b4';
 const PROPOSER_AGENT = 'correction-proposer_4b48798f3211425e98520e3056ab02b4';
@@ -1439,136 +1234,7 @@ async function deviationContext(db: any, deviationId: string, memo?: (id: string
   return { dev, convo, transcript, cmmsRecord };
 }
 
-server.addHandler({
-  name: 'classifyRootCause',
-  description:
-    'Ask the Claude classifier where a confirmed deviation belongs: agent, data, sow or unknown. One model call.',
-  parameters: { deviationId: { description: 'Deviation id', type: 'string' } },
-  execute: async (args) => {
-    const db = connect();
-    const id = String(args.deviationId ?? '').trim();
-    const { dev, transcript, cmmsRecord } = await deviationContext(db, id);
 
-    // Payload is deliberately small. The sandbox aborts a fetch at ~10s, and a
-    // full transcript pushes the model past it. Evidence turns plus the live
-    // record are what actually decide the cause; the rest is bulk.
-    const message = JSON.stringify({
-      deviation: {
-        id: dev.id,
-        criterionId: dev.criterion_id,
-        clauseRef: dev.clause_ref,
-        summary: dev.summary,
-        severity: dev.severity,
-        evidence: JSON.parse(dev.evidence || '[]'),
-      },
-      keyTurns: transcript.slice(-6),
-      cmmsRecord,
-    });
-
-    const { verdict } = await runJudgeWithRetry(ROOT_CAUSE_AGENT, message);
-    const rootCause = String(verdict?.rootCause ?? '');
-    if (['agent', 'data', 'sow', 'unknown'].indexOf(rootCause) < 0) {
-      throw new Error(`Classifier returned an unusable rootCause: ${rootCause}`);
-    }
-
-    db.query('update deviations set root_cause=$2 where id=$1', [id, rootCause]);
-    return {
-      deviationId: id,
-      rootCause,
-      rootCauseLabel: verdict.rootCauseLabel ?? '',
-      needsHuman: verdict.needsHuman === true,
-      confidence: verdict.confidence ?? null,
-    };
-  },
-});
-
-server.addHandler({
-  name: 'proposeCorrection',
-  description:
-    'Ask the Claude proposer for a fix for a confirmed deviation. Stores it as `proposed` — applies nothing.',
-  parameters: { deviationId: { description: 'Deviation id', type: 'string' } },
-  execute: async (args) => {
-    const db = connect();
-    const id = String(args.deviationId ?? '').trim();
-    const { dev, transcript, cmmsRecord } = await deviationContext(db, id);
-
-    // Same size constraint as the classifier — see there.
-    const message = JSON.stringify({
-      deviation: {
-        id: dev.id,
-        criterionId: dev.criterion_id,
-        clauseRef: dev.clause_ref,
-        summary: dev.summary,
-        severity: dev.severity,
-        rootCause: dev.root_cause,
-        evidence: JSON.parse(dev.evidence || '[]'),
-      },
-      keyTurns: transcript.slice(-6),
-      cmmsRecord,
-    });
-
-    const { verdict } = await runJudgeWithRetry(PROPOSER_AGENT, message);
-    const target = String(verdict?.target ?? '');
-    if (['prompt', 'mapping', 'sow', 'human'].indexOf(target) < 0) {
-      throw new Error(`Proposer returned an unusable target: ${target}`);
-    }
-
-    const corrId = `CO-${id}`;
-    const cmmsAction = JSON.stringify(verdict.cmmsAction ?? {});
-    const prior = db.query('select id from corrections where id = $1 limit 1', [corrId]).rows[0];
-
-    // before_text is stored empty: the proposer is no longer asked to echo the
-    // current text back, since quoting input we already hold cost output tokens
-    // against a hard request ceiling for no information gain.
-    if (prior) {
-      db.query(
-        `update corrections set target=$2, title=$3, rationale=$4, before_text='', after_text=$5,
-           cmms_action=$6, recommended_action=$7, state='proposed' where id=$1`,
-        [
-          corrId,
-          target,
-          String(verdict.title ?? ''),
-          String(verdict.rationale ?? ''),
-          String(verdict.afterText ?? ''),
-          cmmsAction,
-          String(verdict.humanTask ?? ''),
-        ],
-      );
-    } else {
-      db.query(
-        `insert into corrections
-           (id, deviation_id, target, title, rationale, before_text, after_text, state,
-            recommended_action, assignee, cmms_action, proposed_at)
-         values ($1,$2,$3,$4,$5,'',$6,'proposed',$7,'',$8,$9)`,
-        [
-          corrId,
-          id,
-          target,
-          String(verdict.title ?? ''),
-          String(verdict.rationale ?? ''),
-          String(verdict.afterText ?? ''),
-          String(verdict.humanTask ?? ''),
-          cmmsAction,
-          nowIso(),
-        ],
-      );
-    }
-    // Drafting a correction does NOT change the finding. The deviation stays
-    // open until a correction is actually applied — see approveCorrection.
-    // Marking it 'correcting' here made the list read "Fix applied" over a
-    // correction still sitting in 'proposed'.
-
-    return {
-      correctionId: corrId,
-      deviationId: id,
-      target,
-      title: verdict.title ?? '',
-      cmmsAction: verdict.cmmsAction ?? null,
-      humanTask: verdict.humanTask ?? '',
-      state: 'proposed',
-    };
-  },
-});
 
 server.addHandler({
   name: 'approveCorrection',
@@ -1742,124 +1408,6 @@ server.addHandler({
   },
 });
 
-server.addHandler({
-  name: 'runCorrection',
-  description:
-    'Classify the root cause and draft a correction in one pass, fetching the CMMS record once and reusing it for both judges. Returns partial progress if the second judge times out.',
-  parameters: { deviationId: { description: 'Deviation id', type: 'string' } },
-  execute: async (args) => {
-    const db = connect();
-    const id = String(args.deviationId ?? '').trim();
-    // One memo for the whole request: the record is read once, both judges see
-    // the same live snapshot, and nothing is persisted.
-    const memo = makeRecordMemo();
-    const { dev, transcript, cmmsRecord } = await deviationContext(db, id, memo);
-
-    const base = {
-      id: dev.id,
-      criterionId: dev.criterion_id,
-      clauseRef: dev.clause_ref,
-      summary: dev.summary,
-      severity: dev.severity,
-      evidence: JSON.parse(dev.evidence || '[]'),
-    };
-    const keyTurns = transcript.slice(-6);
-
-    // --- Stage 1: root cause -------------------------------------------------
-    // Fetches are serialized by the platform, so these run one after another
-    // whatever we do. Each stage is reported independently so a stage-2 timeout
-    // never discards a successful stage 1.
-    let rootCause = '';
-    let classifyError: string | null = null;
-    try {
-      const { verdict } = await runJudgeWithRetry(
-        ROOT_CAUSE_AGENT,
-        JSON.stringify({ deviation: base, keyTurns, cmmsRecord }),
-      );
-      const rc = String(verdict?.rootCause ?? '');
-      if (['agent', 'data', 'sow', 'unknown'].indexOf(rc) >= 0) {
-        rootCause = rc;
-        db.query('update deviations set root_cause=$2 where id=$1', [id, rc]);
-      } else {
-        classifyError = `Classifier returned an unusable rootCause: ${rc}`;
-      }
-    } catch (err) {
-      classifyError = err instanceof Error ? err.message : String(err);
-    }
-
-    if (!rootCause) {
-      return {
-        deviationId: id,
-        stage: 'classify',
-        ok: false,
-        error: classifyError,
-        retryable: String(classifyError ?? '').indexOf(JUDGE_TIMEOUT) === 0,
-      };
-    }
-
-    // --- Stage 2: proposal ---------------------------------------------------
-    try {
-      const { verdict } = await runJudgeWithRetry(
-        PROPOSER_AGENT,
-        JSON.stringify({ deviation: { ...base, rootCause }, keyTurns, cmmsRecord }),
-      );
-      const target = String(verdict?.target ?? '');
-      if (['prompt', 'mapping', 'sow', 'human'].indexOf(target) < 0) {
-        throw new Error(`Proposer returned an unusable target: ${target}`);
-      }
-
-      const corrId = `CO-${id}`;
-      const cmmsAction = JSON.stringify(verdict.cmmsAction ?? {});
-      const prior = db.query('select id from corrections where id = $1 limit 1', [corrId]).rows[0];
-      if (prior) {
-        db.query(
-          `update corrections set target=$2, title=$3, rationale=$4, before_text='', after_text=$5,
-             cmms_action=$6, recommended_action=$7, state='proposed' where id=$1`,
-          [corrId, target, String(verdict.title ?? ''), String(verdict.rationale ?? ''),
-           String(verdict.afterText ?? ''), cmmsAction, String(verdict.humanTask ?? '')],
-        );
-      } else {
-        db.query(
-          `insert into corrections
-             (id, deviation_id, target, title, rationale, before_text, after_text, state,
-              recommended_action, assignee, cmms_action, proposed_at)
-           values ($1,$2,$3,$4,$5,'',$6,'proposed',$7,'',$8,$9)`,
-          [corrId, id, target, String(verdict.title ?? ''), String(verdict.rationale ?? ''),
-           String(verdict.afterText ?? ''), String(verdict.humanTask ?? ''),
-           cmmsAction, nowIso()],
-        );
-      }
-      // Drafting a correction does NOT change the finding. The deviation stays
-    // open until a correction is actually applied — see approveCorrection.
-    // Marking it 'correcting' here made the list read "Fix applied" over a
-    // correction still sitting in 'proposed'.
-
-      return {
-        deviationId: id,
-        stage: 'complete',
-        ok: true,
-        rootCause,
-        correctionId: corrId,
-        target,
-        title: verdict.title ?? '',
-        cmmsAction: verdict.cmmsAction ?? null,
-        humanTask: verdict.humanTask ?? '',
-      };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      // Stage 1 succeeded and is already persisted — report it rather than
-      // throwing the whole pass away.
-      return {
-        deviationId: id,
-        stage: 'propose',
-        ok: false,
-        rootCause,
-        error: message,
-        retryable: message.indexOf(JUDGE_TIMEOUT) === 0,
-      };
-    }
-  },
-});
 
 /**
  * Agent tool calls for one call — WIRED BUT DORMANT.
@@ -2368,20 +1916,5 @@ server.addHandler({
   },
 });
 
-server.addHandler({
-  name: 'judgeTest',
-  description:
-    'Verify the function -> connections -> AI Studio judge path end to end with one real call.',
-  parameters: {
-    agent: { description: 'Agent link name', type: 'string' },
-    message: { description: 'Message to grade', type: 'string' },
-  },
-  execute: async (args) => {
-    const agent = String(args.agent ?? '').trim();
-    if (!agent) throw new Error('agent link name is required');
-    const { verdict, threadId } = await runJudge(agent, String(args.message ?? ''));
-    return { ok: true, threadId, verdict };
-  },
-});
 
 server.execute();

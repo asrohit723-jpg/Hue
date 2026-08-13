@@ -324,6 +324,10 @@ export const api = {
     transcriptSource: string;
     /** The call's recording, when the channel has one. */
     recordingFileId: number | null;
+    /** The channel's own AI summary (HTML), tags and satisfaction reading. */
+    aiSummary: string | null;
+    aiTags: string | null;
+    satisfaction: string | null;
   }> => {
     const res = await call<{
       conversation: ConversationRow;
@@ -332,10 +336,16 @@ export const api = {
       cmmsRecord: Record<string, unknown> | null;
       transcriptSource?: string;
       recordingFileId?: number | null;
+      aiSummary?: string | null;
+      aiTags?: string | null;
+      satisfaction?: string | null;
     }>('governance', 'getConversation', { id });
     return {
       transcriptSource: res.transcriptSource ?? 'stored',
       recordingFileId: res.recordingFileId ?? null,
+      aiSummary: res.aiSummary ?? null,
+      aiTags: res.aiTags ?? null,
+      satisfaction: res.satisfaction ?? null,
       conversation: toConversation(res.conversation, res.turns),
       deviations: res.deviations.map(withExtras),
       cmmsRecord: res.cmmsRecord,

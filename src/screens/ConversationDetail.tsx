@@ -9,6 +9,7 @@ import { runSemanticCriterion, SEMANTIC_CRITERIA } from '../lib/judges';
 import { BootSkeleton } from './BootSkeleton';
 import { LoadError } from '../components/Chrome';
 import criteriaSeed from '../../evals/criteria.seed.json';
+import { WIRED_CRITERIA, layerOf } from '../lib/criteria';
 
 import { avatarColor, clock, duration, evalTone, initials, label, sentimentTone } from '../lib/tone';
 import { page } from '../lib/layout';
@@ -48,6 +49,9 @@ interface Loaded {
   cmmsRecord: Record<string, unknown> | null;
   transcriptSource: string;
   recordingFileId: number | null;
+  aiSummary: string | null;
+  aiTags: string | null;
+  satisfaction: string | null;
 }
 
 type QualityTab = 'score' | 'eval' | 'sentiment';
@@ -58,21 +62,6 @@ const TAB_LABEL: Record<QualityTab, string> = {
   sentiment: 'Sentiment',
 };
 
-/**
- * The criteria this engine actually grades, so the eval tab can show a tick for
- * one that passed rather than only listing failures. Titles and clauses come
- * from the seeded criteria file; anything the engine does not run is not
- * claimed as passed.
- */
-const CHECKED_CRITERIA: Array<{ id: string; layer: 'deterministic' | 'semantic' }> = [
-  { id: 'CR-LOG-01', layer: 'deterministic' },
-  { id: 'CR-LOG-02', layer: 'deterministic' },
-  { id: 'CR-ESC-04', layer: 'deterministic' },
-  { id: 'CR-CALL-01', layer: 'deterministic' },
-  { id: 'CR-LOG-04', layer: 'semantic' },
-  { id: 'CR-SCHED-01', layer: 'semantic' },
-  { id: 'CR-CAT-01', layer: 'semantic' },
-];
 
 const panel: React.CSSProperties = {
   background: '#fff',
@@ -104,6 +93,58 @@ function readField(rec: Record<string, unknown>, key: string): string | null {
     return named === undefined || named === null ? null : String(named);
   }
   return String(v);
+}
+
+/**
+ * Turn the channel's HTML summary into headed sections.
+ *
+ * The upstream value is a fragment like
+ * `<div><b>Issue Reported</b><br><ul><li>User X reported …</li></ul>…</div>`.
+ * It is NOT injected as HTML — it comes from outside this app, and rendering
+ * foreign markup for the sake of a bold heading is not a trade worth making.
+ * Tags are stripped, `<b>` runs become headings, `<li>` items become lines.
+ */
+function parseAiSummary(html: string | null): Array<{ heading: string; body: string }> {
+  if (!html) return [];
+  const decode = (t: string) =>
+    t
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'");
+  const strip = (t: string) => decode(t.replace(/<[^>]*>/g, '')).replace(/\s+/g, ' ').trim();
+
+  const sections: Array<{ heading: string; body: string }> = [];
+
+  // The channel uses <b> for two different jobs: section headings, and emphasis
+  // INSIDE a list item ("reported a filter fault at <b>Skyline, unit 100</b>").
+  // Splitting on every <b> turns each emphasised phrase into a bogus heading, so
+  // inline markup inside <li> is flattened first and only the structural <b>
+  // survives to be split on.
+  const flattened = html.replace(
+    /<li>([\s\S]*?)<\/li>/gi,
+    (_m, inner: string) => `<li>${inner.replace(/<\/?[bi]>/gi, '')}</li>`,
+  );
+
+  const parts = flattened.split(/<b>(.*?)<\/b>/i);
+  // parts[0] is anything before the first heading; ignore it if empty.
+  for (let i = 1; i < parts.length; i += 2) {
+    const heading = strip(parts[i]);
+    const rest = parts[i + 1] ?? '';
+    const items = Array.from(rest.matchAll(/<li>([\s\S]*?)<\/li>/gi))
+      .map((m) => strip(m[1]))
+      .filter(Boolean);
+    const body = items.length ? items.join(' ') : strip(rest);
+    if (heading && body) sections.push({ heading, body });
+  }
+  // No headings at all — show it as one block rather than losing it.
+  if (!sections.length) {
+    const flat = strip(html);
+    if (flat) sections.push({ heading: 'Call summary', body: flat });
+  }
+  return sections;
 }
 
 /** CMMS timestamps arrive as epoch millis. */
@@ -219,6 +260,12 @@ export function ConversationDetail({
   // The tool call that failed, if one did — the missing-record panel quotes it
   // rather than describing the failure in the abstract.
   const failedTool = c.transcript.find((t) => t.toolCall && t.toolCall.status !== 'success');
+  const aiSections = parseAiSummary(data.aiSummary);
+  // The channel's own topic tags, when it produced any.
+  const channelTags = (data.aiTags ?? '')
+    .split(',')
+    .map((t) => t.trim())
+    .filter(Boolean);
 
   return (
     <div style={page('22px 32px 40px')}>
@@ -421,12 +468,14 @@ export function ConversationDetail({
               </span>
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
-              {[
-                c.site,
-                c.srRecordId ? 'SR raised' : 'No SR',
-                deviations.length ? 'Deviation' : 'Within scope',
-                label(c.status),
-              ]
+              {(channelTags.length
+                ? channelTags
+                : [
+                    c.site,
+                    c.srRecordId ? 'SR raised' : 'No SR',
+                    deviations.length ? 'Deviation' : 'Within scope',
+                    label(c.status),
+                  ])
                 .filter((t): t is string => !!t)
                 .map((t) => (
                   <span
@@ -445,18 +494,34 @@ export function ConversationDetail({
                 ))}
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 12 }}>
-              <Section heading="What the caller reported">
-                {c.snippet ??
-                  textTurns.find((t) => t.performer === 'caller')?.message ??
-                  'No caller turn recorded.'}
-              </Section>
-              <Section heading="What the agent did">
-                {c.srRecordId
-                  ? `Raised service request ${c.srRecordId} in the CMMS, resolved back to this call.`
-                  : c.srCreated
-                    ? 'Confirmed to the caller that the issue was logged. No service request reached the CMMS.'
-                    : 'Did not claim a service request was raised, and none was found.'}
-              </Section>
+              {/* The channel summarises every call with its own model once the
+                  call ends. That is real AI output already produced upstream, so
+                  it is shown as written rather than replaced by prose this
+                  screen assembles from the same facts. Where the channel has
+                  none — an older call, or one it could not summarise — the
+                  composed sections below stand in, and say what they are. */}
+              {aiSections.length > 0 ? (
+                aiSections.map((s) => (
+                  <Section key={s.heading} heading={s.heading}>
+                    {s.body}
+                  </Section>
+                ))
+              ) : (
+                <>
+                  <Section heading="What the caller reported">
+                    {c.snippet ??
+                      textTurns.find((t) => t.performer === 'caller')?.message ??
+                      'No caller turn recorded.'}
+                  </Section>
+                  <Section heading="What the agent did">
+                    {c.srRecordId
+                      ? `Raised service request ${c.srRecordId} in the CMMS, resolved back to this call.`
+                      : c.srCreated
+                        ? 'Confirmed to the caller that the issue was logged. No service request reached the CMMS.'
+                        : 'Did not claim a service request was raised, and none was found.'}
+                  </Section>
+                </>
+              )}
               <Section
                 heading="Where it stands"
                 fg={deviations.length ? 'var(--danger-700)' : 'var(--success-700)'}
@@ -469,6 +534,11 @@ export function ConversationDetail({
                     ? 'Not evaluated yet.'
                     : 'Passed every active criterion. No action needed.'}
               </Section>
+              {aiSections.length > 0 && (
+                <div style={{ fontSize: 11, color: 'var(--ink-500)' }}>
+                  Summary written by the call channel's own model.
+                </div>
+              )}
             </div>
           </div>
 
@@ -763,7 +833,7 @@ function EvalTab({
         <span style={{ marginLeft: 'auto', fontSize: 12, fontWeight: 600, color: evalFg }}>
           {notEvaluated
             ? 'awaiting evaluation'
-            : `${failedCount} of ${CHECKED_CRITERIA.length} failed`}
+            : `${failedCount} of ${WIRED_CRITERIA.size} failed`}
         </span>
       </div>
 
@@ -772,7 +842,8 @@ function EvalTab({
           This call has not been evaluated yet.
         </div>
       ) : (
-        CHECKED_CRITERIA.map(({ id, layer }) => {
+        Array.from(WIRED_CRITERIA).map((id) => {
+          const layer = layerOf(id);
           const failed = failedBy.get(id);
           const meta = byId.get(id);
           return (

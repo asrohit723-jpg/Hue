@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import seed from '../../evals/criteria.seed.json';
 import { api, type DeviationWithEvidence } from '../lib/vibe';
 import { BootSkeleton } from './BootSkeleton';
+import { WIRED_CRITERIA } from '../lib/criteria';
 import { page } from '../lib/layout';
 
 /**
@@ -39,16 +40,6 @@ interface SeedCriterion {
   active: boolean;
 }
 
-/** The criteria the engine actually runs — see functions/governance.ts. */
-const IMPLEMENTED = new Set([
-  'CR-LOG-01',
-  'CR-LOG-02',
-  'CR-ESC-04',
-  'CR-CALL-01',
-  'CR-LOG-04',
-  'CR-SCHED-01',
-  'CR-CAT-01',
-]);
 
 /** Criterion family -> the design's category vocabulary. */
 const CATEGORY: Record<string, string> = {
@@ -148,7 +139,7 @@ export function ScopeEvals() {
     const needle = q.trim().toLowerCase();
     return criteria
       .map((c) => {
-        const implemented = IMPLEMENTED.has(c.id);
+        const implemented = WIRED_CRITERIA.has(c.id);
         const fails = failures.get(c.id) ?? 0;
         const rate =
           implemented && evaluatedCalls
@@ -170,7 +161,7 @@ export function ScopeEvals() {
       });
   }, [criteria, q, filter, failures, evaluatedCalls]);
 
-  const wired = criteria.filter((c) => IMPLEMENTED.has(c.id)).length;
+  const wired = criteria.filter((c) => WIRED_CRITERIA.has(c.id)).length;
   const coverage = criteria.length ? Math.round((wired / criteria.length) * 100) : 0;
   const det = criteria.filter((c) => c.layer === 'deterministic').length;
 
@@ -663,7 +654,7 @@ export function ScopeEvals() {
           creating={creating}
           fails={openEval ? (failures.get(openEval.id) ?? 0) : 0}
           evaluatedCalls={evaluatedCalls ?? 0}
-          implemented={openEval ? IMPLEMENTED.has(openEval.id) : false}
+          implemented={openEval ? WIRED_CRITERIA.has(openEval.id) : false}
           onClose={() => {
             setOpenEval(null);
             setCreating(false);

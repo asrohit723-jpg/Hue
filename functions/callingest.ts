@@ -171,10 +171,17 @@ function spokenSrNumber(turns: Array<{ performer: string; message: string }>): s
 
 function toSentiment(level: unknown): string {
   const s = String(level ?? '').toUpperCase();
-  if (s.includes('VERY_DISSATISFIED') || s.includes('ANGRY')) return 'distressed';
-  if (s.includes('DISSATISFIED') || s.includes('FRUSTRAT')) return 'frustrated';
-  if (s.includes('SATISFIED') || s.includes('HAPPY')) return 'happy';
-  if (s) return 'neutral';
+  // Order matters: VERY_DISSATISFIED contains DISSATISFIED, which contains
+  // SATISFIED. A looser test earlier in the chain reads the worst calls as the
+  // happiest ones.
+  if (s.includes('VERY_DISSATISFIED') || s.includes('ANGRY') || s.includes('DISTRESS'))
+    return 'distressed';
+  if (s.includes('DISSATISFIED') || s.includes('FRUSTRAT') || s.includes('CONCERNED'))
+    return 'frustrated';
+  if (s.includes('SATISFIED') || s.includes('HAPPY') || s.includes('PLEASED')) return 'happy';
+  if (s.includes('NEUTRAL')) return 'neutral';
+  // An unrecognised level is NOT neutral — neutral is a real reading. Leave it
+  // empty so the UI shows "Unknown" rather than inventing calm.
   return '';
 }
 
