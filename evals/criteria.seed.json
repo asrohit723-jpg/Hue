@@ -1,0 +1,193 @@
+{
+  "_comment": [
+    "Eval criteria derived from the SOW, seeded into the `criteria` table.",
+    "",
+    "`layer` is the load-bearing field. It decides which engine grades the",
+    "criterion, and the split is deliberate:",
+    "",
+    "  deterministic — answerable from the CMMS record and the tool-call log",
+    "    alone, by plain JS/SQL. Record exists? Field null? Escalation past its",
+    "    SLA clock? Category in the approved list? These must never be sent to",
+    "    a model: they are exact, reproducible and free, and a model would only",
+    "    add latency and the chance of a wrong answer to a question that has a",
+    "    lookup answer.",
+    "",
+    "  semantic — needs someone to read the call and judge. Did the agent",
+    "    acknowledge distress before gathering data? Was this genuinely out of",
+    "    scope? Did it ask one question or three? These go to a Claude judge.",
+    "",
+    "`checkType` maps to CheckType in shared/contract.ts."
+  ],
+  "criteria": [
+    {
+      "id": "CR-LOG-01",
+      "clauseRef": "S-2.1",
+      "title": "A service request exists in the CMMS for every issue the caller reported",
+      "description": "Join the call to the CMMS. Every distinct issue raised must resolve to a real service request record.",
+      "checkType": "intended_action",
+      "layer": "deterministic",
+      "source": "ai_drafted",
+      "active": true
+    },
+    {
+      "id": "CR-LOG-02",
+      "clauseRef": "S-2.1",
+      "title": "No service request is confirmed to the caller without an SR number returned by the CMMS",
+      "description": "If the agent told the caller the request was logged, the tool call must have returned a record id before that turn.",
+      "checkType": "intended_action",
+      "layer": "deterministic",
+      "source": "ai_drafted",
+      "active": true
+    },
+    {
+      "id": "CR-LOG-03",
+      "clauseRef": "S-2.3",
+      "title": "The agent read the SR number back to the caller before ending the call",
+      "description": "The returned record id must appear in an agent turn after the tool call succeeded.",
+      "checkType": "communication_fidelity",
+      "layer": "deterministic",
+      "source": "ai_drafted",
+      "active": true
+    },
+    {
+      "id": "CR-LOG-04",
+      "clauseRef": "S-2.2",
+      "title": "Each distinct issue has its own service request",
+      "description": "Deciding how many distinct issues a caller raised requires reading the call; the count is then compared against the records found.",
+      "checkType": "intended_action",
+      "layer": "semantic",
+      "source": "ai_drafted",
+      "active": true
+    },
+    {
+      "id": "CR-LOG-05",
+      "clauseRef": "S-3.4",
+      "title": "The service request category matches the approved service group for the issue and zone",
+      "description": "The record's category is checked against the client's approved service-group mapping for that site and zone.",
+      "checkType": "entity_resolution",
+      "layer": "deterministic",
+      "source": "ai_drafted",
+      "active": true
+    },
+    {
+      "id": "CR-LOG-06",
+      "clauseRef": "S-2.4",
+      "title": "The fault description on the SR quotes the caller's own words for the symptom",
+      "description": "Whether the written description faithfully represents what the caller actually said is a reading judgement.",
+      "checkType": "communication_fidelity",
+      "layer": "semantic",
+      "source": "ai_drafted",
+      "active": true
+    },
+    {
+      "id": "CR-SCOPE-01",
+      "clauseRef": "S-1.3",
+      "title": "Out-of-scope requests are redirected, not logged",
+      "description": "Whether a reported item falls inside 'building services' or is tenant-owned needs the clause read against the specific item.",
+      "checkType": "scope_boundary",
+      "layer": "semantic",
+      "source": "ai_drafted",
+      "active": true
+    },
+    {
+      "id": "CR-SCOPE-02",
+      "clauseRef": "S-1.4",
+      "title": "Tenant-owned equipment is referred to the tenant's own vendor with the correct wording",
+      "description": "Requires judging both the scope call and the phrasing of the redirect.",
+      "checkType": "scope_boundary",
+      "layer": "semantic",
+      "source": "ai_drafted",
+      "active": true
+    },
+    {
+      "id": "CR-ESC-01",
+      "clauseRef": "S-5.1",
+      "title": "Priority 1 safety issues escalated to the duty manager within 10 minutes",
+      "description": "Clock arithmetic between call end and the escalation event. Exact, so never an LLM.",
+      "checkType": "escalation_sla",
+      "layer": "deterministic",
+      "source": "ai_drafted",
+      "active": true
+    },
+    {
+      "id": "CR-ESC-02",
+      "clauseRef": "S-5.2",
+      "title": "Safety keywords trigger the P1 flow immediately",
+      "description": "Whether the caller actually described a safety emergency — as opposed to using a word that merely resembles one — needs reading.",
+      "checkType": "escalation_sla",
+      "layer": "semantic",
+      "source": "ai_drafted",
+      "active": true
+    },
+    {
+      "id": "CR-ESC-03",
+      "clauseRef": "S-5.3",
+      "title": "The stated response time matches the priority of the request",
+      "description": "The response window quoted to the caller is compared against the SLA table for the record's priority.",
+      "checkType": "flow_conformance",
+      "layer": "deterministic",
+      "source": "ai_drafted",
+      "active": true
+    },
+    {
+      "id": "CR-ESC-04",
+      "clauseRef": "S-2.5",
+      "title": "A callback task is created when a call drops before confirmation",
+      "description": "Call ended in a dropped state with no confirmed record, and no callback task exists within 15 minutes.",
+      "checkType": "intended_action",
+      "layer": "deterministic",
+      "source": "ai_drafted",
+      "active": true
+    },
+    {
+      "id": "CR-CALL-01",
+      "clauseRef": "S-6.1",
+      "title": "The agent confirms the caller's name, site and contact number on every call",
+      "description": "All three must be present on the record and traceable to a confirmation turn.",
+      "checkType": "required_field",
+      "layer": "deterministic",
+      "source": "ai_drafted",
+      "active": true
+    },
+    {
+      "id": "CR-CALL-02",
+      "clauseRef": "S-6.2",
+      "title": "The agent asks one question at a time",
+      "description": "Counting genuine questions in a turn is a language judgement, not a question-mark count.",
+      "checkType": "flow_conformance",
+      "layer": "semantic",
+      "source": "ai_drafted",
+      "active": true
+    },
+    {
+      "id": "CR-CALL-03",
+      "clauseRef": "S-6.3",
+      "title": "Distressed callers are acknowledged before any data gathering begins",
+      "description": "Requires reading the caller's state and the agent's first response to it.",
+      "checkType": "communication_fidelity",
+      "layer": "semantic",
+      "source": "ai_drafted",
+      "active": true
+    },
+    {
+      "id": "CR-SCHED-01",
+      "clauseRef": "S-4.2",
+      "title": "A caller-stated preferred visit window is recorded on the service request",
+      "description": "Detecting that the caller stated a window is semantic; whether it reached the record is then a field check. Graded semantically, with the record's requested-window field supplied as evidence.",
+      "checkType": "required_field",
+      "layer": "semantic",
+      "source": "ai_drafted",
+      "active": true
+    },
+    {
+      "id": "CR-SCHED-02",
+      "clauseRef": "S-4.3",
+      "title": "Access restrictions are captured verbatim",
+      "description": "Whether the recorded text faithfully preserves the caller's stated restriction.",
+      "checkType": "communication_fidelity",
+      "layer": "semantic",
+      "source": "ai_drafted",
+      "active": true
+    }
+  ]
+}

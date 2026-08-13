@@ -6,3 +6,6 @@ build/
 .DS_Store
 .vibe/
 *.log
+
+# TypeScript incremental build artifact
+tsconfig.tsbuildinfo

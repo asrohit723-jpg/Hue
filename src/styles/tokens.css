@@ -1,0 +1,170 @@
+/* =========================================================
+   Facilio Atom — Foundations
+   Vendored verbatim from the design system's colors_and_type.css
+   (_ds/facilio-atom-design-system-262fe304.../colors_and_type.css).
+
+   Only change from source: the local Roboto / Roboto Condensed @font-face
+   blocks are replaced by the Google Fonts import below. Same typefaces,
+   same weights — avoids shipping 13 TTFs in the bundle. JetBrains Mono was
+   already a CDN import in the source file.
+
+   Every var(--*) referenced by the design is defined here. Do not edit
+   values: the design is the visual source of truth.
+   ========================================================= */
+
+@import url("https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,600;0,700;0,900;1,400;1,500;1,600&family=Roboto+Condensed:wght@400;500;600;700;900&family=JetBrains+Mono:wght@400;500&display=swap");
+
+:root {
+  /* ---------- Brand ---------- */
+  --brand-indigo:        #3C229D;   /* app logos, wordmark */
+  --brand-indigo-600:    #5E3ED3;   /* AI / accent purple */
+  --brand-indigo-400:    #7D63DC;
+  --brand-indigo-050:    #F3EFFF;   /* tint */
+  --brand-pink:          #FF3B7F;   /* wordmark dot */
+  --brand-cyan:          #2ED1FF;   /* wordmark square */
+
+  /* ---------- Primary (Facilio Blue) ---------- */
+  --blue-700: #0024D6;   /* deepest */
+  --blue-600: #0047AB;
+  --blue-500: #0059D6;   /* ← primary */
+  --blue-400: #1673F6;
+  --blue-300: #3D8BFA;
+  --blue-200: #6CA8FC;
+  --blue-100: #A2C8FE;
+  --blue-050: #CCE2FF;
+  --blue-025: #EAF2FF;
+
+  /* ---------- Neutrals (slate) ---------- */
+  --ink-900:  #283648;   /* body text, headings */
+  --ink-700:  #384A62;
+  --ink-600:  #607796;   /* secondary text */
+  --ink-500:  #7B91B0;   /* muted */
+  --ink-400:  #9CAFCA;   /* border-strong */
+  --ink-300:  #B9B9B9;
+  --ink-200:  #D8E3F1;   /* border */
+  --ink-100:  #ECECEC;   /* divider */
+  --ink-050:  #FAFAFA;   /* surface alt */
+  --white:    #FFFFFF;
+  --black:    #000000;
+
+  /* ---------- Semantic ---------- */
+  --success-700: #0F6F06;
+  --success-500: #29A01E;
+  --success-400: #49B83F;
+  --success-050: #E9F7E7;
+
+  --warning-500: #FFD405;
+  --warning-700: #8A6D00;
+  --warning-050: #FFF8D6;
+
+  --danger-700:  #8E1313;
+  --danger-500:  #B61919;
+  --danger-050:  #FDE7E7;
+
+  --info-500:    #0059D6; /* alias of primary */
+  --info-050:    #EAF2FF;
+
+  /* ---------- Surfaces & borders ---------- */
+  --bg-app:       #F7F9FC;
+  --bg-surface:   #FFFFFF;
+  --bg-surface-alt: var(--ink-050);
+  --bg-overlay:   rgba(40, 54, 72, 0.48);
+
+  --border-subtle: var(--ink-100);
+  --border-default: var(--ink-200);
+  --border-strong: var(--ink-400);
+  --border-focus:  var(--blue-500);
+
+  /* ---------- Text roles ---------- */
+  --text-primary:   var(--ink-900);
+  --text-secondary: var(--ink-600);
+  --text-muted:     var(--ink-500);
+  --text-onBrand:   var(--white);
+  --text-link:      var(--blue-500);
+
+  /* ---------- Radii ---------- */
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-pill: 999px;
+
+  /* ---------- Spacing (4px base) ---------- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* ---------- Shadows ---------- */
+  --shadow-xs:  0 1px 2px rgba(40,54,72,0.06);
+  --shadow-sm:  0 1px 3px rgba(40,54,72,0.08), 0 1px 2px rgba(40,54,72,0.04);
+  --shadow-md:  0 4px 12px rgba(40,54,72,0.08), 0 1px 2px rgba(40,54,72,0.04);
+  --shadow-lg:  0 12px 32px rgba(40,54,72,0.12), 0 2px 4px rgba(40,54,72,0.04);
+  --shadow-xl:  0 24px 56px rgba(40,54,72,0.16);
+  --shadow-focus: 0 0 0 3px rgba(0,89,214,0.20);
+
+  /* ---------- Typography ---------- */
+  --font-sans: "Roboto", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: "Roboto Condensed", "Roboto", system-ui, sans-serif;
+  --font-serif: var(--font-display); /* legacy alias */
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* Type scale (px / line-height) */
+  --fs-display: 48px;  --lh-display: 56px;
+  --fs-h1: 32px;       --lh-h1: 40px;
+  --fs-h2: 24px;       --lh-h2: 32px;
+  --fs-h3: 20px;       --lh-h3: 28px;
+  --fs-h4: 16px;       --lh-h4: 24px;
+  --fs-body: 14px;     --lh-body: 20px;
+  --fs-small: 12px;    --lh-small: 16px;
+  --fs-tiny: 11px;     --lh-tiny: 14px;
+
+  /* ---------- Motion ---------- */
+  --ease-standard: cubic-bezier(0.2, 0.0, 0.0, 1.0);
+  --ease-emphasis: cubic-bezier(0.2, 0.0, 0.0, 1.2);
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-slow: 260ms;
+}
+
+/* =========================================================
+   App shell — ported from the <helmet> <style> block of
+   "Helpdesk Governance.dc.html". `.skq` is the only class the
+   design markup uses; everything else there is inline styles.
+   ========================================================= */
+html, body { margin: 0; padding: 0; background: var(--bg-app); }
+* { box-sizing: border-box; }
+
+a { color: var(--blue-500); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+input, button, textarea, select { font-family: var(--font-sans); }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb {
+  background: #D8E3F1;
+  border-radius: 999px;
+  border: 3px solid #F7F9FC;
+}
+
+@keyframes skpulse { 0%, 100% { opacity: 1 } 50% { opacity: .5 } }
+.skq {
+  background: #E7EEF7;
+  border-radius: 4px;
+  animation: skpulse 1.4s cubic-bezier(0.2, 0, 0, 1) infinite;
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(0, 89, 214, 0.20);
+}

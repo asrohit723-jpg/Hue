@@ -1,0 +1,7 @@
+{
+  "name": "hue",
+  "build": {
+    "publish": "dist"
+  },
+  "app": "hue"
+}

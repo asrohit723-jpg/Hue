@@ -1,0 +1,58 @@
+{
+  "title": "sow_conformance_verdict",
+  "type": "object",
+  "description": "Verdict for one semantic criterion graded against one call.",
+  "properties": {
+    "criterionId": {
+      "type": "string",
+      "description": "The criterion this verdict is for, echoed back verbatim."
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["pass", "fail", "not_applicable"],
+      "description": "not_applicable when the call never reached the situation the criterion governs — e.g. a scheduling criterion on a call where no visit was discussed. Do not use it to avoid a hard call."
+    },
+    "confidence": {
+      "type": "number",
+      "description": "How confident the verdict is, between 0 and 1 inclusive."
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["critical", "high", "medium", "low"],
+      "description": "Consequence for the caller and the site if this failure stands. Safety exposure and unlogged faults are critical; wording and style issues are low. Only meaningful when verdict is fail."
+    },
+    "summary": {
+      "type": "string",
+      "description": "One or two sentences stating what went wrong, naming the caller and the fault. Written for a supervisor who has not read the transcript."
+    },
+    "evidence": {
+      "type": "array",
+      "description": "The specific turns that justify the verdict. Quote the transcript; never paraphrase into something the caller did not say. Empty when verdict is pass.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "at": {
+            "type": "string",
+            "description": "Timestamp offset of the turn, as it appears in the transcript."
+          },
+          "who": {
+            "type": "string",
+            "description": "Who produced this turn: Caller, Agent, Tool call, System, or CMMS."
+          },
+          "quote": {
+            "type": "string",
+            "description": "The turn's text, verbatim."
+          },
+          "isViolation": {
+            "type": "boolean",
+            "description": "True if this turn is where the criterion was broken, false if it is supporting context."
+          }
+        },
+        "required": ["at", "who", "quote", "isViolation"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["criterionId", "verdict", "confidence", "severity", "summary", "evidence"],
+  "additionalProperties": false
+}

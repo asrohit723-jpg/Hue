@@ -1,0 +1,229 @@
+-- Hue — app database schema
+--
+-- SINGLE SOURCE OF TRUTH: the CMMS (Ocean's 3).
+--
+-- This database holds exactly two kinds of thing, and neither is a copy of
+-- CMMS data:
+--
+--   1. TRANSCRIPTS — the voice agent's calls. The connections catalog has no
+--      transcript-read action, so the text has to live somewhere. This is the
+--      *claim*: what the agent said it did.
+--
+--   2. HUE'S OWN FINDINGS — criteria, deviations, corrections. These are
+--      produced by Hue and exist nowhere else.
+--
+-- What is deliberately NOT here: service requests, work orders, sites,
+-- categories, priorities, statuses, contacts. Every one of those is read live
+-- from the CMMS at check time. There is no `sr_status` column to drift out of
+-- date, because a check that reads a stale copy is not a ground-truth check.
+--
+-- The join between claim and truth is conversations.cmms_sr_id, resolved by
+-- number/site/time against the live CMMS. Resolution is recorded, not the
+-- record.
+--
+-- Migration rule (preview and production share one schema): ADDITIVE ONLY.
+
+-- ---------------------------------------------------------------
+-- conversations — one call handled by the AI helpdesk agent
+-- ---------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS conversations (
+  id              TEXT PRIMARY KEY,
+  call_id         TEXT        NOT NULL UNIQUE,
+  started_at      TIMESTAMPTZ NOT NULL,
+  duration_sec    INTEGER,
+
+  -- Caller identity as stated ON THE CALL. Not a CMMS contact record — this is
+  -- what the caller said, which is itself evidence when it fails to match.
+  caller_name     TEXT,
+  caller_phone    TEXT,
+
+  -- Site as the agent understood it, verbatim from the call. Used only as an
+  -- input to the join; the authoritative site is whatever the matched CMMS
+  -- record carries.
+  site_hint       TEXT,
+
+  -- 'completed' | 'in_progress' | 'dropped'
+  status          TEXT        NOT NULL DEFAULT 'completed',
+  sentiment       TEXT,
+
+  -- ---- The claim -------------------------------------------------------
+  -- What the agent asserted on the call. NEVER read as truth; it is the thing
+  -- being checked. sr_claimed = the agent told the caller a request exists.
+  sr_claimed      BOOLEAN     NOT NULL DEFAULT FALSE,
+  -- The SR number the agent read back, if it read one back at all.
+  sr_number_claimed TEXT,
+
+  -- ---- The resolved join ----------------------------------------------
+  -- The real CMMS service request id this call resolves to, or NULL when the
+  -- join found nothing. NULL against sr_claimed = TRUE is the headline finding.
+  cmms_sr_id      TEXT,
+  -- How the join was made, so the UI can show its working and a weak match is
+  -- never mistaken for a strong one.
+  -- 'sr_number' | 'site_time' | 'none'
+  join_method     TEXT        NOT NULL DEFAULT 'none',
+  join_confidence REAL        NOT NULL DEFAULT 0,
+  joined_at       TIMESTAMPTZ,
+
+  eval_status     TEXT        NOT NULL DEFAULT 'not_evaluated',
+  quality_score   INTEGER,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS conversations_started_idx ON conversations (started_at DESC);
+CREATE INDEX IF NOT EXISTS conversations_eval_idx    ON conversations (eval_status);
+CREATE INDEX IF NOT EXISTS conversations_srid_idx    ON conversations (cmms_sr_id);
+
+-- ---------------------------------------------------------------
+-- transcript_turns — the call itself, in order
+-- ---------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS transcript_turns (
+  id               BIGSERIAL PRIMARY KEY,
+  conversation_id  TEXT    NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  turn_index       INTEGER NOT NULL,
+  -- 'caller' | 'agent' | 'system'
+  performer        TEXT    NOT NULL,
+  message          TEXT    NOT NULL DEFAULT '',
+  at_offset        TEXT,
+
+  -- Tool-call log. NULL tool_name => this turn is speech.
+  -- This is still the claim side: it records what the agent's tooling reported,
+  -- which is exactly what gets contradicted when the CMMS has no matching row.
+  tool_name        TEXT,
+  tool_status      TEXT,
+  tool_args        TEXT,
+  tool_result      TEXT,
+  tool_record_id   TEXT,
+  tool_error       TEXT,
+  CONSTRAINT transcript_turn_uniq UNIQUE (conversation_id, turn_index)
+);
+
+CREATE INDEX IF NOT EXISTS transcript_turns_convo_idx
+  ON transcript_turns (conversation_id, turn_index);
+
+-- ---------------------------------------------------------------
+-- sow_versions / sow_clauses — the contract Hue grades against
+-- ---------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS sow_versions (
+  id          TEXT PRIMARY KEY,
+  version     TEXT        NOT NULL UNIQUE,
+  body        TEXT        NOT NULL,
+  is_current  BOOLEAN     NOT NULL DEFAULT FALSE,
+  updated_by  TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS sow_clauses (
+  id              TEXT PRIMARY KEY,
+  sow_version_id  TEXT    NOT NULL REFERENCES sow_versions(id) ON DELETE CASCADE,
+  clause_ref      TEXT    NOT NULL,
+  body            TEXT    NOT NULL,
+  edited          BOOLEAN NOT NULL DEFAULT FALSE,
+  CONSTRAINT sow_clauses_version_ref_uniq UNIQUE (sow_version_id, clause_ref)
+);
+
+-- ---------------------------------------------------------------
+-- criteria — what each call is graded against
+-- layer decides the engine: 'deterministic' never touches a model.
+-- ---------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS criteria (
+  id           TEXT PRIMARY KEY,
+  clause_ref   TEXT    NOT NULL,
+  title        TEXT    NOT NULL,
+  description  TEXT    NOT NULL DEFAULT '',
+  check_type   TEXT    NOT NULL,
+  layer        TEXT    NOT NULL CHECK (layer IN ('deterministic', 'semantic')),
+  source       TEXT    NOT NULL DEFAULT 'ai_drafted',
+  active       BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS criteria_active_idx ON criteria (active);
+
+-- ---------------------------------------------------------------
+-- deviations — Hue's findings. UNIQUE(conversation, criterion) makes a
+-- re-grade update in place rather than pile up duplicates.
+-- ---------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS deviations (
+  id               TEXT PRIMARY KEY,
+  conversation_id  TEXT        NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  criterion_id     TEXT        NOT NULL,
+  clause_ref       TEXT        NOT NULL DEFAULT '',
+  summary          TEXT        NOT NULL,
+  severity         TEXT        NOT NULL,
+  root_cause       TEXT        NOT NULL DEFAULT 'unknown',
+  status           TEXT        NOT NULL DEFAULT 'open',
+  detected_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  detected_by      TEXT        NOT NULL DEFAULT 'deterministic'
+                   CHECK (detected_by IN ('deterministic', 'semantic')),
+  -- The CMMS record id this finding was checked against, so the evidence can
+  -- be re-fetched live and audited. Not the record's contents.
+  checked_sr_id    TEXT,
+  evidence         JSONB       NOT NULL DEFAULT '[]'::jsonb,
+  CONSTRAINT deviations_convo_criterion_uniq UNIQUE (conversation_id, criterion_id)
+);
+
+CREATE INDEX IF NOT EXISTS deviations_status_idx   ON deviations (status, severity);
+CREATE INDEX IF NOT EXISTS deviations_detected_idx ON deviations (detected_at DESC);
+
+-- ---------------------------------------------------------------
+-- corrections — the propose -> approve -> apply loop.
+-- applied_write_key is claimed BEFORE any CMMS write, so approving twice
+-- cannot create two service requests.
+-- ---------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS corrections (
+  id                  TEXT PRIMARY KEY,
+  deviation_id        TEXT        NOT NULL REFERENCES deviations(id) ON DELETE CASCADE,
+  target              TEXT        NOT NULL,
+  title               TEXT        NOT NULL DEFAULT '',
+  rationale           TEXT        NOT NULL DEFAULT '',
+  before_text         TEXT        NOT NULL DEFAULT '',
+  after_text          TEXT        NOT NULL DEFAULT '',
+  state               TEXT        NOT NULL DEFAULT 'proposed',
+  recommended_action  TEXT,
+  assignee            TEXT,
+  -- The CMMS write this correction proposes, as returned by the proposer.
+  cmms_action         JSONB       NOT NULL DEFAULT '{}'::jsonb,
+  proposed_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  applied_at          TIMESTAMPTZ,
+  resolved_at         TIMESTAMPTZ,
+  applied_write_key   TEXT UNIQUE,
+  applied_record_id   TEXT
+);
+
+CREATE INDEX IF NOT EXISTS corrections_state_idx     ON corrections (state);
+CREATE INDEX IF NOT EXISTS corrections_deviation_idx ON corrections (deviation_id);
+
+-- ---------------------------------------------------------------
+-- eval_runs — audit trail for each grading pass
+-- ---------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS eval_runs (
+  id               TEXT PRIMARY KEY,
+  conversation_id  TEXT        NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  started_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at      TIMESTAMPTZ,
+  outcome          TEXT        NOT NULL DEFAULT 'running',
+  checks_run       INTEGER     NOT NULL DEFAULT 0,
+  deviations_found INTEGER     NOT NULL DEFAULT 0,
+  error_message    TEXT
+);
+
+CREATE INDEX IF NOT EXISTS eval_runs_convo_idx ON eval_runs (conversation_id, started_at DESC);
+
+-- ---------------------------------------------------------------
+-- notifications — outbound alerts. dedupe_key stops re-notifying.
+-- ---------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS notifications (
+  id            TEXT PRIMARY KEY,
+  deviation_id  TEXT        REFERENCES deviations(id) ON DELETE CASCADE,
+  channel       TEXT        NOT NULL DEFAULT 'teams',
+  title         TEXT        NOT NULL,
+  body          TEXT        NOT NULL DEFAULT '',
+  state         TEXT        NOT NULL DEFAULT 'pending',
+  dedupe_key    TEXT        NOT NULL UNIQUE,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  sent_at       TIMESTAMPTZ,
+  error_message TEXT
+);
+
+CREATE INDEX IF NOT EXISTS notifications_state_idx ON notifications (state);

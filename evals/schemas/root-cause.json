@@ -1,0 +1,30 @@
+{
+  "title": "root_cause_classification",
+  "type": "object",
+  "description": "Where the fix for a confirmed deviation belongs.",
+  "properties": {
+    "rootCause": {
+      "type": "string",
+      "enum": ["agent", "data", "sow", "unknown"],
+      "description": "agent: the agent had what it needed and still behaved wrongly — the fix is the prompt. data: the agent followed its instructions but a mapping, category list or reference table was wrong or missing — the fix is that data. sow: the clause itself is ambiguous or silent, so the agent was not clearly wrong — the fix is the clause. unknown: the evidence does not distinguish these."
+    },
+    "rootCauseLabel": {
+      "type": "string",
+      "description": "A short noun phrase naming the cause, e.g. 'Prompt has no tool-failure path' or 'Mapping table missing museum zone'."
+    },
+    "rootCauseDetail": {
+      "type": "string",
+      "description": "One sentence explaining why this is the cause rather than the other candidates."
+    },
+    "needsHuman": {
+      "type": "boolean",
+      "description": "True when correcting the underlying cause still leaves real-world work undone — an unlogged fault, a missed escalation, a visit that must be rebooked. A prompt fix does not cool a food court."
+    },
+    "confidence": {
+      "type": "number",
+      "description": "Confidence in this classification, between 0 and 1 inclusive."
+    }
+  },
+  "required": ["rootCause", "rootCauseLabel", "rootCauseDetail", "needsHuman", "confidence"],
+  "additionalProperties": false
+}

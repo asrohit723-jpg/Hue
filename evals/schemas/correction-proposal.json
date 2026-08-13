@@ -1,0 +1,84 @@
+{
+  "title": "correction_proposal",
+  "type": "object",
+  "description": "A proposed fix for a confirmed deviation. Reviewed by a human before anything is applied.",
+  "properties": {
+    "target": {
+      "type": "string",
+      "enum": ["prompt", "mapping", "sow", "human"],
+      "description": "What gets edited. Must follow from the root cause: agent -> prompt, data -> mapping, sow -> sow. Use human when no edit fixes it and a person must act."
+    },
+    "title": {
+      "type": "string",
+      "description": "Short imperative name for the change, e.g. 'Add a tool-failure guard to the agent prompt'."
+    },
+    "rationale": {
+      "type": "string",
+      "description": "One or two sentences on why this change prevents recurrence."
+    },
+    "beforeText": {
+      "type": "string",
+      "description": "The current text or mapping being replaced, quoted exactly as it exists today. Empty string if nothing exists yet."
+    },
+    "afterText": {
+      "type": "string",
+      "description": "The proposed replacement, complete and ready to apply — not a description of what to write."
+    },
+    "scope": {
+      "type": "string",
+      "description": "Which sites or behaviours this change affects."
+    },
+    "cmmsAction": {
+      "type": "object",
+      "description": "The CMMS write needed to repair the real-world consequence, when there is one. Omitted fields mean no write is proposed.",
+      "properties": {
+        "verb": {
+          "type": "string",
+          "enum": ["create", "update", "none"],
+          "description": "none when the correction is purely a prompt, mapping or clause edit with no record to repair."
+        },
+        "why": {
+          "type": "string",
+          "description": "Why this record write is needed, in one sentence."
+        },
+        "recordId": {
+          "type": "string",
+          "description": "The existing service request id to update. Empty string when verb is create or none."
+        },
+        "fields": {
+          "type": "array",
+          "description": "The fields to write, as label/value pairs.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "label": { "type": "string" },
+              "value": { "type": "string" },
+              "isChange": {
+                "type": "boolean",
+                "description": "True when this field is being changed from an existing value rather than set for the first time."
+              }
+            },
+            "required": ["label", "value", "isChange"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": ["verb", "why", "recordId", "fields"],
+      "additionalProperties": false
+    },
+    "humanAction": {
+      "type": "object",
+      "description": "The task for a person, when needsHuman was true.",
+      "properties": {
+        "why": { "type": "string" },
+        "action": { "type": "string", "description": "What the person must do, specific enough to act on without reading the call." },
+        "assigneeRole": { "type": "string", "description": "The role that should own it, e.g. 'Helpdesk supervisor' or 'Duty manager'." },
+        "priority": { "type": "string" }
+      },
+      "required": ["why", "action", "assigneeRole", "priority"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["target", "title", "rationale", "beforeText", "afterText", "scope", "cmmsAction", "humanAction"],
+  "additionalProperties": false
+}

@@ -1,0 +1,2 @@
+id,conversation_id,criterion_id,clause_ref,summary,severity,root_cause,status,detected_at,detected_by,checked_sr_id,evidence
+__seed__,__seed__,__seed__,S-0.0,seed,low,unknown,open,2026-01-01T00:00:00Z,deterministic,,[]

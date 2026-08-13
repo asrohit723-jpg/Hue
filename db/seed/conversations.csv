@@ -1,0 +1,2 @@
+id,call_id,started_at,duration_sec,caller_name,caller_phone,site_hint,status,sentiment,sr_claimed,sr_number_claimed,cmms_sr_id,join_method,join_confidence,eval_status,quality_score
+__seed__,__seed__,2026-01-01T00:00:00Z,0,seed,seed,seed,completed,neutral,false,,,none,0,not_evaluated,0
