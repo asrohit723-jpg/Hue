@@ -1071,9 +1071,14 @@ server.addHandler({
     // rather than an empty transcript.
     const isLive = String(convo.id ?? '').startsWith('L-');
     let transcriptSource = isLive ? 'stored_fallback' : 'stored';
+    // The call log's recording, when it has one. Surfaced so the player can say
+    // whether a recording exists rather than implying one either way.
+    let recordingFileId: number | null = null;
     if (isLive && convo.call_id) {
       try {
         const payload = await callLogs('get-call-log', { callLogId: Number(convo.call_id) });
+        const rec = callRecordOf(payload);
+        recordingFileId = Number(rec?.recordingFileId) || null;
         const live = transcriptionOf(payload);
         if (live.length) {
           const startMs = Number(callRecordOf(payload)?.startTime ?? 0);
@@ -1125,6 +1130,7 @@ server.addHandler({
       conversation: convo,
       turns,
       transcriptSource,
+      recordingFileId,
       deviations: deviations.map((d: any) => ({ ...d, evidence: JSON.parse(d.evidence || '[]') })),
       cmmsRecord,
     };

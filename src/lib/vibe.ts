@@ -190,6 +190,8 @@ export type ConversationView = Conversation & {
    * role cannot add one. Live calls are re-read from the connection on open.
    */
   source: string;
+  /** How the CMMS join was resolved: 'sr_number' | 'site_time' | 'none'. */
+  joinMethod: string;
   /**
    * What to caption the caller with. Live call logs leave `name` null on most
    * calls, so the phone number is the only identity the caller has.
@@ -227,6 +229,7 @@ export function toConversation(
     deviationCount: Number(r.deviation_count ?? 0),
     srNumberClaimed: r.sr_number_claimed || null,
     source: String(r.id ?? '').startsWith('L-') ? 'live' : 'seed',
+    joinMethod: r.join_method || 'none',
     // Falls through name -> phone -> nothing, so a live call with no name is
     // still identified by the number that rang in rather than "Unknown caller".
     callerLabel: r.caller_name || r.caller_phone || 'Unknown caller',
@@ -314,14 +317,22 @@ export const api = {
     deviations: DeviationWithEvidence[];
     /** Fetched live from the CMMS at read time, not cached. */
     cmmsRecord: Record<string, unknown> | null;
+    /** 'live' | 'stored' | 'stored_fallback' — where the transcript came from. */
+    transcriptSource: string;
+    /** The call's recording, when the channel has one. */
+    recordingFileId: number | null;
   }> => {
     const res = await call<{
       conversation: ConversationRow;
       turns: TranscriptTurnRow[];
       deviations: DeviationRow[];
       cmmsRecord: Record<string, unknown> | null;
+      transcriptSource?: string;
+      recordingFileId?: number | null;
     }>('governance', 'getConversation', { id });
     return {
+      transcriptSource: res.transcriptSource ?? 'stored',
+      recordingFileId: res.recordingFileId ?? null,
       conversation: toConversation(res.conversation, res.turns),
       deviations: res.deviations.map(withExtras),
       cmmsRecord: res.cmmsRecord,

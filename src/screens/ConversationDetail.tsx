@@ -8,6 +8,7 @@ import {
 import { runSemanticSuite } from '../lib/judges';
 import { BootSkeleton } from './BootSkeleton';
 import { LoadError } from '../components/Chrome';
+import criteriaSeed from '../../evals/criteria.seed.json';
 
 /**
  * Calls whose semantic criteria have already been graded in this page session.
@@ -17,34 +18,65 @@ const gradedThisSession = new Set<string>();
 import { avatarColor, clock, duration, evalTone, initials, label, sentimentTone } from '../lib/tone';
 
 /**
- * Call detail — ported from the CONVERSATION DETAIL block of the design
- * ("Helpdesk Governance.dc.html", lines 1791-1995): the two-column split, the
- * chat-bubble transcript with tool calls inline, and the CMMS ground-truth
- * panel that turns red when the record the agent promised is not there.
+ * Call detail — the full CONVERSATION DETAIL block of the design
+ * ("Helpdesk Governance.dc.html", lines 1791-1995): the recording bar, the
+ * chat-bubble transcript with tool calls inline, the call summary, the CMMS
+ * ground-truth panel that turns red when the promised record is not there, and
+ * the tabbed quality card — Scorecard, Eval verdict, Sentiment.
  *
- * Three pieces of the design are not reproduced, because nothing behind them
- * is real:
+ * Every element of the design is present. Where the data behind one does not
+ * exist, the element stays and says so — an empty meter and a "—" are honest,
+ * where a fabricated number is not. Specifically:
  *
- *   - the audio player. No recording is stored, or referenced, anywhere. A
- *     transport with a moving progress bar over silence is the most misleading
- *     thing this screen could contain.
- *   - the score bars. The design hard-codes latency 88 / STT 94 / TTS 91;
- *     `quality_score` is 0 on every stored row and no scorecard rows exist. The
- *     panel says the call is not scored instead of drawing invented bars.
- *   - the ten-segment sentiment timeline, which the design fabricates from a
- *     per-sentiment pattern. One end-of-call sentiment is what we hold, so one
- *     is what is shown.
+ *   - The recording bar renders, and reports whether a recording exists at all
+ *     (live call logs carry a recordingFileId). Playback is not wired, so the
+ *     transport is disabled rather than animating over silence.
+ *   - The scorecard's four measures — latency, STT, TTS, response quality — are
+ *     in the frozen contract but nothing populates them yet, so each row shows
+ *     an empty meter and "not measured" instead of the design's hardcoded
+ *     88 / 94 / 91.
+ *   - The sentiment strip shows the ONE end-of-call sentiment we hold, as a
+ *     single band. The design fabricates a ten-segment arc per sentiment; a
+ *     shape implying we tracked sentiment over time would be a lie about what
+ *     was measured.
+ *   - Tool calls render inline exactly as designed, and a call whose channel
+ *     records none says that in the same slot rather than leaving a gap.
  *
- * Everything else on the screen is read from the call: the transcript and its
- * tool arguments, errors and results from the app DB, and the service request
- * fetched live from the CMMS at read time.
+ * Everything else is read from the call: the transcript from the connection or
+ * the app DB, and the service request fetched live from the CMMS at read time.
  */
 
 interface Loaded {
   conversation: ConversationView;
   deviations: DeviationWithEvidence[];
   cmmsRecord: Record<string, unknown> | null;
+  transcriptSource: string;
+  recordingFileId: number | null;
 }
+
+type QualityTab = 'score' | 'eval' | 'sentiment';
+
+const TAB_LABEL: Record<QualityTab, string> = {
+  score: 'Scorecard',
+  eval: 'Eval verdict',
+  sentiment: 'Sentiment',
+};
+
+/**
+ * The criteria this engine actually grades, so the eval tab can show a tick for
+ * one that passed rather than only listing failures. Titles and clauses come
+ * from the seeded criteria file; anything the engine does not run is not
+ * claimed as passed.
+ */
+const CHECKED_CRITERIA: Array<{ id: string; layer: 'deterministic' | 'semantic' }> = [
+  { id: 'CR-LOG-01', layer: 'deterministic' },
+  { id: 'CR-LOG-02', layer: 'deterministic' },
+  { id: 'CR-ESC-04', layer: 'deterministic' },
+  { id: 'CR-CALL-01', layer: 'deterministic' },
+  { id: 'CR-LOG-04', layer: 'semantic' },
+  { id: 'CR-SCHED-01', layer: 'semantic' },
+  { id: 'CR-CAT-01', layer: 'semantic' },
+];
 
 const panel: React.CSSProperties = {
   background: '#fff',
@@ -106,6 +138,7 @@ export function ConversationDetail({
   const [data, setData] = useState<Loaded | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
+  const [tab, setTab] = useState<QualityTab>('score');
 
   useEffect(() => {
     let cancelled = false;
@@ -259,6 +292,10 @@ export function ConversationDetail({
       >
         {/* transcript */}
         <div style={panel}>
+          <RecordingBar
+            durationLabel={duration(c.durationSec)}
+            recordingFileId={data.recordingFileId}
+          />
           <div
             style={{
               padding: '14px 18px',
@@ -271,6 +308,7 @@ export function ConversationDetail({
             <h3 style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>Transcript</h3>
             <span style={{ fontSize: 12, color: 'var(--ink-600)' }}>
               {textTurns.length} turns · tool calls shown inline
+              {data.transcriptSource === 'live' ? ' · read live' : ''}
             </span>
           </div>
           <div style={{ padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -280,6 +318,33 @@ export function ConversationDetail({
             {c.transcript.length === 0 && (
               <div style={{ fontSize: 13, color: 'var(--ink-600)' }}>
                 No transcript stored for this call.
+              </div>
+            )}
+            {/* The design renders tool calls inline between the turns. The
+                helpdesk voice channel logs none — get-call-tool-calls cannot
+                resolve a voice thread yet — so the slot says so rather than
+                closing up as though the agent used no tools. */}
+            {c.transcript.length > 0 && !c.transcript.some((t) => t.toolCall) && (
+              <div
+                style={{
+                  border: '1px dashed var(--border-default)',
+                  background: 'var(--ink-050)',
+                  borderRadius: 8,
+                  padding: '10px 13px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  fontSize: 12,
+                  color: 'var(--ink-600)',
+                }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--ink-400)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+                </svg>
+                <span style={{ fontFamily: 'var(--font-mono)' }}>No tool calls recorded</span>
+                <span style={{ marginLeft: 'auto' }}>
+                  This channel does not log them — see docs/live-call-ingest.md
+                </span>
               </div>
             )}
           </div>
@@ -364,66 +429,344 @@ export function ConversationDetail({
             onOpenIntervention={firstFinding ? () => onOpenDeviation(firstFinding.id) : null}
           />
 
-          {/* evaluation */}
-          <div style={panel}>
-            <div
+          {/* call quality — tabbed, exactly as the design */}
+          <QualityCard
+            conversation={c}
+            deviations={deviations}
+            tab={tab}
+            onTab={setTab}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The recording transport, at the design's measurements.
+ *
+ * Live call logs carry a `recordingFileId`, so whether a recording EXISTS is
+ * real and is reported. Streaming its bytes into an <audio> element is not
+ * wired, so the transport stays disabled: a progress bar that animates over
+ * nothing would be the most misleading control on the screen.
+ */
+function RecordingBar({
+  durationLabel,
+  recordingFileId,
+}: {
+  durationLabel: string;
+  recordingFileId: number | null;
+}) {
+  const has = recordingFileId !== null;
+  return (
+    <div
+      style={{
+        padding: '12px 18px',
+        borderBottom: '1px solid var(--border-default)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 14,
+      }}
+    >
+      <button
+        disabled
+        title={has ? 'Playback is not wired yet' : 'No recording for this call'}
+        aria-label="Play recording"
+        style={{
+          width: 36,
+          height: 36,
+          flex: '0 0 36px',
+          borderRadius: 999,
+          border: `1px solid ${has ? 'var(--blue-500)' : 'var(--border-default)'}`,
+          background: has ? 'var(--blue-500)' : 'var(--ink-100)',
+          color: has ? '#fff' : 'var(--ink-400)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          cursor: 'not-allowed',
+        }}
+      >
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M8 5.5v13l11-6.5z" />
+        </svg>
+      </button>
+      <div style={{ flex: 1, height: 6, borderRadius: 999, background: 'var(--ink-100)' }}>
+        <div style={{ height: '100%', borderRadius: 999, background: 'var(--blue-500)', width: '0%' }} />
+      </div>
+      <span
+        style={{
+          fontSize: 12,
+          color: 'var(--ink-600)',
+          fontVariantNumeric: 'tabular-nums',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {has ? `0:00 / ${durationLabel}` : 'No recording'}
+      </span>
+      <button
+        disabled={!has}
+        title={has ? `Recording file ${recordingFileId}` : 'No recording for this call'}
+        aria-label="Download recording"
+        style={{
+          width: 34,
+          height: 34,
+          borderRadius: 4,
+          border: '1px solid var(--border-default)',
+          background: '#fff',
+          color: has ? 'var(--ink-600)' : 'var(--ink-300)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          cursor: has ? 'pointer' : 'not-allowed',
+        }}
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+          <polyline points="7 10 12 15 17 10" />
+          <path d="M12 15V3" />
+        </svg>
+      </button>
+    </div>
+  );
+}
+
+/** The design's three-tab quality card. */
+function QualityCard({
+  conversation: c,
+  deviations,
+  tab,
+  onTab,
+}: {
+  conversation: ConversationView;
+  deviations: DeviationWithEvidence[];
+  tab: QualityTab;
+  onTab: (t: QualityTab) => void;
+}) {
+  const ev = evalTone(c.evalStatus);
+  const failedBy = new Map(deviations.map((d) => [d.criterionId, d]));
+  const notEvaluated = c.evalStatus === 'not_evaluated';
+
+  return (
+    <div style={panel}>
+      <div
+        style={{
+          padding: '4px 8px',
+          borderBottom: '1px solid var(--border-default)',
+          display: 'flex',
+          gap: 2,
+        }}
+      >
+        {(Object.keys(TAB_LABEL) as QualityTab[]).map((k) => (
+          <button
+            key={k}
+            onClick={() => onTab(k)}
+            style={{
+              flex: 1,
+              height: 36,
+              border: 'none',
+              background: tab === k ? 'var(--blue-025)' : 'transparent',
+              color: tab === k ? 'var(--blue-600)' : 'var(--ink-600)',
+              fontWeight: 600,
+              fontSize: 13,
+              borderRadius: 6,
+              cursor: 'pointer',
+            }}
+          >
+            {TAB_LABEL[k]}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'score' && <ScoreTab conversation={c} />}
+      {tab === 'eval' && (
+        <EvalTab
+          failedBy={failedBy}
+          notEvaluated={notEvaluated}
+          evalFg={ev.fg}
+          failedCount={deviations.length}
+        />
+      )}
+      {tab === 'sentiment' && <SentimentTab conversation={c} />}
+    </div>
+  );
+}
+
+/**
+ * Scorecard.
+ *
+ * `Scorecard` in the frozen contract carries latencyMs, sttAccuracy, ttsQuality
+ * and responseQuality, and nothing populates any of them — no scorecard row has
+ * ever been written. The design hardcodes 88 / 94 / 91; those numbers describe
+ * nothing, so each row keeps its meter and reports that it was not measured.
+ */
+function ScoreTab({ conversation: c }: { conversation: ConversationView }) {
+  const rows = [
+    { label: 'Latency', value: null as number | null, display: 'not measured' },
+    { label: 'Speech-to-text accuracy', value: null as number | null, display: 'not measured' },
+    { label: 'Text-to-speech quality', value: null as number | null, display: 'not measured' },
+    {
+      label: 'Response quality',
+      value: c.qualityScore && c.qualityScore > 0 ? c.qualityScore : null,
+      display: c.qualityScore && c.qualityScore > 0 ? `${c.qualityScore} / 100` : 'not scored',
+    },
+  ];
+
+  const overall = c.qualityScore && c.qualityScore > 0 ? String(c.qualityScore) : '—';
+
+  return (
+    <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <span style={{ fontSize: 12, color: 'var(--ink-600)' }}>Overall score</span>
+        <span
+          style={{
+            fontWeight: 700,
+            fontFamily: 'var(--font-display)',
+            fontSize: 20,
+            color: overall === '—' ? 'var(--ink-400)' : 'var(--ink-900)',
+          }}
+        >
+          {overall}
+        </span>
+      </div>
+      {rows.map((r) => (
+        <div key={r.label} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+            <span>{r.label}</span>
+            <span
               style={{
-                padding: '10px 16px',
-                borderBottom: '1px solid var(--ink-100)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
+                color: r.value === null ? 'var(--ink-400)' : 'var(--ink-600)',
+                fontVariantNumeric: 'tabular-nums',
               }}
             >
-              <span style={{ fontSize: 11, color: 'var(--ink-500)' }}>Evaluation</span>
+              {r.display}
+            </span>
+          </div>
+          <div
+            style={{ height: 6, borderRadius: 999, background: 'var(--ink-100)', overflow: 'hidden' }}
+          >
+            <div
+              style={{
+                height: '100%',
+                width: `${r.value ?? 0}%`,
+                background:
+                  r.value === null
+                    ? 'transparent'
+                    : r.value >= 85
+                      ? 'var(--success-500)'
+                      : r.value >= 65
+                        ? 'var(--warning-500)'
+                        : 'var(--danger-500)',
+                borderRadius: 999,
+              }}
+            />
+          </div>
+        </div>
+      ))}
+      <p style={{ margin: 0, fontSize: 11, color: 'var(--ink-500)', lineHeight: '16px' }}>
+        Latency, speech-to-text and text-to-speech are not captured by the call channel yet, so
+        they are shown unmeasured rather than estimated.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Eval verdict — a row per criterion the engine actually grades, ticked or
+ * crossed, with its clause and the finding's own words on a failure.
+ *
+ * Only criteria this engine runs are listed. A tick means "checked and did not
+ * fail"; nothing is ticked that was never checked.
+ */
+function EvalTab({
+  failedBy,
+  notEvaluated,
+  evalFg,
+  failedCount,
+}: {
+  failedBy: Map<string, DeviationWithEvidence>;
+  notEvaluated: boolean;
+  evalFg: string;
+  failedCount: number;
+}) {
+  const seed = (criteriaSeed as { criteria: Array<{ id: string; title: string; clauseRef: string }> })
+    .criteria;
+  const byId = new Map(seed.map((s) => [s.id, s]));
+
+  return (
+    <div>
+      <div
+        style={{
+          padding: '10px 16px',
+          borderBottom: '1px solid var(--ink-100)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+        }}
+      >
+        {/* The SOW carries no version — criteria.seed.json has no such field —
+            so the count of criteria stands in for it rather than a made-up
+            "v4.2". */}
+        <span style={{ fontSize: 11, color: 'var(--ink-500)' }}>
+          against SOW · {seed.length} criteria
+        </span>
+        <span style={{ marginLeft: 'auto', fontSize: 12, fontWeight: 600, color: evalFg }}>
+          {notEvaluated
+            ? 'awaiting evaluation'
+            : `${failedCount} of ${CHECKED_CRITERIA.length} failed`}
+        </span>
+      </div>
+
+      {notEvaluated ? (
+        <div style={{ padding: '14px 16px', fontSize: 13, color: 'var(--ink-600)' }}>
+          This call has not been evaluated yet.
+        </div>
+      ) : (
+        CHECKED_CRITERIA.map(({ id, layer }) => {
+          const failed = failedBy.get(id);
+          const meta = byId.get(id);
+          return (
+            <div
+              key={id}
+              style={{
+                padding: '11px 16px',
+                borderBottom: '1px solid var(--ink-100)',
+                display: 'flex',
+                gap: 10,
+                alignItems: 'flex-start',
+              }}
+            >
               <span
-                style={{ marginLeft: 'auto', fontSize: 12, fontWeight: 600, color: ev.fg }}
-              >
-                {c.evalStatus === 'not_evaluated'
-                  ? 'awaiting evaluation'
-                  : deviations.length
-                    ? `${deviations.length} failed`
-                    : 'all criteria passed'}
-              </span>
-            </div>
-            {deviations.map((d) => (
-              <div
-                key={d.id}
-                onClick={() => onOpenDeviation(d.id)}
                 style={{
-                  padding: '11px 16px',
-                  borderBottom: '1px solid var(--ink-100)',
+                  width: 16,
+                  height: 16,
+                  borderRadius: 999,
+                  background: failed ? 'var(--danger-500)' : 'var(--success-050)',
+                  color: failed ? '#fff' : 'var(--success-700)',
                   display: 'flex',
-                  gap: 10,
-                  alignItems: 'flex-start',
-                  cursor: 'pointer',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  flex: '0 0 16px',
+                  marginTop: 2,
                 }}
               >
-                <span
+                {failed ? '✕' : '✓'}
+              </span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div
                   style={{
-                    width: 16,
-                    height: 16,
-                    borderRadius: 999,
-                    background: 'var(--danger-500)',
-                    color: '#fff',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: 11,
-                    fontWeight: 700,
-                    flex: '0 0 16px',
-                    marginTop: 2,
+                    fontSize: 13,
+                    fontWeight: 500,
+                    color: failed ? 'var(--danger-700)' : 'var(--ink-900)',
                   }}
                 >
-                  ✕
-                </span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--danger-700)' }}>
-                    {d.criterionId}
-                  </div>
-                  <div style={{ fontSize: 12, color: 'var(--ink-600)', marginTop: 2 }}>
-                    Clause {d.clauseRef} · {d.severity} · detected by {d.detectedBy}
-                  </div>
+                  {meta?.title ?? id}
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--ink-600)', marginTop: 2 }}>
+                  Clause {failed?.clauseRef ?? meta?.clauseRef ?? '—'} · {layer}
+                </div>
+                {failed && (
                   <div
                     style={{
                       fontSize: 12,
@@ -435,45 +778,74 @@ export function ConversationDetail({
                       lineHeight: '17px',
                     }}
                   >
-                    {d.summary}
+                    {failed.summary}
                   </div>
-                </div>
+                )}
               </div>
-            ))}
-            {deviations.length === 0 && (
-              <div style={{ padding: '14px 16px', fontSize: 13, color: 'var(--ink-600)' }}>
-                {c.evalStatus === 'not_evaluated'
-                  ? 'This call has not been evaluated yet.'
-                  : 'No criterion failed on this call.'}
-              </div>
-            )}
-            {/* The design scores every call on latency, STT and TTS. None of
-                those are measured yet, so the panel reports the one score we do
-                store — and says so when it is absent. */}
-            <div
-              style={{
-                padding: '11px 16px',
-                borderTop: '1px solid var(--ink-100)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-              }}
-            >
-              <span style={{ fontSize: 12, color: 'var(--ink-600)' }}>Quality score</span>
-              <span
-                style={{
-                  fontWeight: 700,
-                  fontFamily: 'var(--font-display)',
-                  fontSize: 20,
-                  color: c.qualityScore ? 'var(--ink-900)' : 'var(--ink-400)',
-                }}
-              >
-                {c.qualityScore ? `${c.qualityScore}` : 'Not scored'}
-              </span>
             </div>
-          </div>
-        </div>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
+/**
+ * Sentiment.
+ *
+ * The design draws a ten-segment arc from a per-sentiment pattern, implying
+ * sentiment was tracked across the call. It was not: the channel reports one
+ * satisfaction level for the whole call. The strip stays, as a single band of
+ * that one real value, captioned for what it is.
+ */
+function SentimentTab({ conversation: c }: { conversation: ConversationView }) {
+  const tone = sentimentTone(c.sentiment);
+  const band = c.sentiment
+    ? c.sentiment === 'happy'
+      ? 'var(--success-500)'
+      : c.sentiment === 'frustrated'
+        ? 'var(--warning-500)'
+        : c.sentiment === 'distressed'
+          ? 'var(--danger-500)'
+          : 'var(--ink-200)'
+    : 'var(--ink-100)';
+
+  return (
+    <div style={{ padding: '14px 16px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <span style={{ fontSize: 12, color: 'var(--ink-600)' }}>Caller sentiment</span>
+        <span
+          style={{
+            fontSize: 11,
+            fontWeight: 600,
+            padding: '2px 8px',
+            borderRadius: 999,
+            background: tone.bg,
+            color: tone.fg,
+          }}
+        >
+          {c.sentiment ? label(c.sentiment) : 'Unknown'}
+        </span>
       </div>
+      <div style={{ display: 'flex', gap: 3, marginTop: 12 }}>
+        <div style={{ flex: 1, height: 10, borderRadius: 2, background: band }} />
+      </div>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          fontSize: 11,
+          color: 'var(--ink-500)',
+          marginTop: 6,
+        }}
+      >
+        <span>0:00</span>
+        <span>{duration(c.durationSec)}</span>
+      </div>
+      <p style={{ margin: '10px 0 0', fontSize: 11, color: 'var(--ink-500)', lineHeight: '16px' }}>
+        One reading for the whole call — the channel reports satisfaction at the end, not over
+        time, so this is shown as a single band rather than a trend.
+      </p>
     </div>
   );
 }
@@ -652,23 +1024,31 @@ function CmmsPanel({
   const found = !!rec;
   const accent = found ? 'var(--ink-900)' : 'var(--danger-700)';
 
+  // The design's eight fields, in its order, followed by the ones this CMMS
+  // actually returns that the design has no slot for. A field the record does
+  // not carry keeps its label and shows "—": dropping the row would quietly
+  // redesign the panel, and inventing a value would be worse.
   const fields = rec
     ? [
-        // localId comes back as 0 on records created through the API, so it is
-        // only used when it actually carries a number.
+        { label: 'Category', value: readField(rec, 'category') },
+        { label: 'Service group', value: readField(rec, 'serviceGroup') },
+        { label: 'Site', value: readField(rec, 'site') },
+        { label: 'Priority', value: readField(rec, 'urgency') },
+        { label: 'Status', value: readField(rec, 'moduleState') },
+        { label: 'Assignee', value: readField(rec, 'assignedTo') ?? readField(rec, 'assignee') },
+        { label: 'Created', value: stamp(rec.sysCreatedTime) },
+        { label: 'Requested window', value: readField(rec, 'requestedWindow') },
+        // Real, and outside the design's eight — appended rather than dropped.
         {
           label: 'Request id',
-          value: (readField(rec, 'localId') !== '0' ? readField(rec, 'localId') : null) ??
+          value:
+            (readField(rec, 'localId') !== '0' ? readField(rec, 'localId') : null) ??
             readField(rec, 'id'),
         },
-        { label: 'Status', value: readField(rec, 'moduleState') },
-        { label: 'Urgency', value: readField(rec, 'urgency') },
-        { label: 'Site', value: readField(rec, 'site') },
         { label: 'Requester', value: readField(rec, 'requester') },
         { label: 'Source', value: readField(rec, 'sourceType') },
-        { label: 'Created', value: stamp(rec.sysCreatedTime) },
         { label: 'Last modified', value: stamp(rec.sysModifiedTime) },
-      ].filter((f) => f.value !== null)
+      ]
     : [];
 
   return (
@@ -698,8 +1078,14 @@ function CmmsPanel({
         <h3 style={{ fontSize: 14, fontWeight: 600, margin: 0, color: accent }}>
           CMMS ground truth
         </h3>
+        {/* The design says "Joined on call id"; this says how the join was
+            really made, since that is what the panel is evidence of. */}
         <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--ink-500)' }}>
-          Read live
+          {conversation.joinMethod === 'sr_number'
+            ? 'Joined on SR number'
+            : conversation.joinMethod === 'site_time'
+              ? 'Joined on site + time'
+              : 'No join resolved'}
         </span>
       </div>
 
@@ -743,7 +1129,14 @@ function CmmsPanel({
             {fields.map((f) => (
               <div key={f.label} style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                 <span style={{ fontSize: 11, color: 'var(--ink-500)' }}>{f.label}</span>
-                <span style={{ wordBreak: 'break-word' }}>{f.value}</span>
+                <span
+                  style={{
+                    wordBreak: 'break-word',
+                    color: f.value === null ? 'var(--ink-400)' : 'var(--ink-900)',
+                  }}
+                >
+                  {f.value ?? '—'}
+                </span>
               </div>
             ))}
           </div>
