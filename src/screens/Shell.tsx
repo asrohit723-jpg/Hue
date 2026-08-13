@@ -494,6 +494,8 @@ export function Shell({ me }: { me: CurrentUser }) {
                 setCallCount(calls);
                 setOpenDeviations(open);
               }}
+              onOpenDeviation={openDeviation}
+              onNavigate={setScreen}
             />
           )}
           {screen === 'convos' && <Conversations onOpen={openCall} />}

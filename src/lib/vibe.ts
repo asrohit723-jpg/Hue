@@ -64,6 +64,8 @@ export interface OverviewMetrics {
   trend: string;
   corrections: number;
   verified: number;
+  /** Total service requests in the CMMS, live. */
+  srTotal: number;
   /** Sites the signed-in org actually has, from facilio-cmms.list-sites. */
   sites: string[];
   /** True when the org has no conversations yet — drives the first-run screen. */
@@ -202,6 +204,8 @@ export type DeviationWithEvidence = Deviation & {
   detectedBy: string;
   callerName: string | null;
   siteHint: string | null;
+  /** Start of the call this finding came from — the Overview filters on it. */
+  startedAt: string | null;
 };
 
 function withExtras(d: DeviationRow): DeviationWithEvidence {
@@ -212,6 +216,7 @@ function withExtras(d: DeviationRow): DeviationWithEvidence {
     detectedBy: d.detected_by,
     callerName: d.caller_name ?? null,
     siteHint: d.site_hint ?? null,
+    startedAt: d.started_at ?? null,
   };
 }
 

@@ -632,6 +632,18 @@ server.addHandler({
       ).rows[0]?.n ?? 0,
     );
 
+    // A correction counts as "applied" once it has actually written to the CMMS
+    // — 'applied' and the two states downstream of it. 'verified' is the subset
+    // the verify step confirmed against the record, so verified <= corrections.
+    const corrections = Number(
+      db.query(
+        "select count(*) as n from corrections where state in ('applied','verifying','resolved')",
+      ).rows[0]?.n ?? 0,
+    );
+    const verified = Number(
+      db.query("select count(*) as n from corrections where state = 'resolved'").rows[0]?.n ?? 0,
+    );
+
     const coverage = convoCount ? Math.round((evaluated / convoCount) * 100) : 0;
     const compliance = evaluated
       ? Math.round(((evaluated - openDeviations) / evaluated) * 100)
@@ -645,8 +657,10 @@ server.addHandler({
       missedSr,
       compliance: Math.max(compliance, 0),
       trend: openDeviations ? `${openDeviations} open` : 'No open deviations',
-      corrections: 0,
-      verified: 0,
+      corrections,
+      verified,
+      /** Live CMMS total, for the "Requests logged" card's denominator context. */
+      srTotal,
       sites,
       isFirstRun: convoCount === 0,
     };
