@@ -101,6 +101,7 @@ export function ScopeEvals() {
   const [creating, setCreating] = useState(false);
 
   const [deviations, setDeviations] = useState<DeviationWithEvidence[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [evaluatedCalls, setEvaluatedCalls] = useState<number | null>(null);
 
   useEffect(() => {
@@ -114,12 +115,15 @@ export function ScopeEvals() {
         if (cancelled) return;
         setDeviations(devs);
         setEvaluatedCalls(convos.filter((c) => c.evalStatus !== 'not_evaluated').length);
-      } catch {
-        // The pass-rate column degrades to "—"; the rest of the screen is
-        // bundled configuration and does not need the network.
+      } catch (err) {
+        // The criteria themselves are bundled configuration and still render,
+        // so this is a partial failure, not a dead screen: the pass-rate column
+        // degrades to "—" and the banner says why rather than leaving a reader
+        // to assume every criterion has never failed.
         if (!cancelled) {
           setDeviations([]);
           setEvaluatedCalls(0);
+          setLoadError(err instanceof Error ? err.message : String(err));
         }
       }
     })();
@@ -169,6 +173,23 @@ export function ScopeEvals() {
 
   return (
     <div style={page('28px 32px 40px')}>
+      {loadError && (
+        <div
+          style={{
+            background: 'var(--warning-050)',
+            border: '1px solid var(--warning-500)',
+            borderRadius: 6,
+            padding: '10px 14px',
+            marginBottom: 16,
+            fontSize: 13,
+            color: 'var(--warning-700)',
+            lineHeight: '19px',
+          }}
+        >
+          Findings could not be loaded, so pass rates show “—”. The criteria below are still
+          accurate — they ship with the app. {loadError}
+        </div>
+      )}
       <div style={{ display: 'flex', alignItems: 'flex-end', gap: 16, flexWrap: 'wrap' }}>
         <div style={{ flex: 1, minWidth: 280 }}>
           <h1

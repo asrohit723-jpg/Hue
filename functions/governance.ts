@@ -1072,6 +1072,9 @@ server.addHandler({
 });
 
 /** The semantic criteria, and the judge that grades each. */
+/** Worst first, for picking the finding a pattern-level fix is filed against. */
+const SEVERITY_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+
 const SEMANTIC_CRITERIA: Record<string, { clauseRef: string; requires: string }> = {
   // The semantic half of CR-LOG-01. The deterministic check catches the agent
   // CLAIMING a request that does not exist. It cannot catch the other way this
@@ -1744,6 +1747,63 @@ server.addHandler({
     ).rows;
 
     return { checked: rows.length, repaired, statuses: after };
+  },
+});
+
+server.addHandler({
+  name: 'patternContext',
+  description:
+    'Everything the browser needs to propose ONE fix for a whole pattern: every occurrence of a criterion across calls, with its evidence and whether the CMMS record was there. No model call — fast.',
+  parameters: { criterionId: { description: 'Criterion id', type: 'string' } },
+  execute: async (args) => {
+    const db = connect();
+    const criterionId = String(args.criterionId ?? '').trim();
+    if (!criterionId) throw new Error('criterionId is required');
+
+    const { rows } = db.query(
+      `select d.*, c.caller_name, c.caller_phone, c.site_hint, c.started_at, c.cmms_sr_id
+         from deviations d
+         join conversations c on c.id = d.conversation_id
+        where d.id <> '__seed__' and d.criterion_id = $1
+        order by d.detected_at`,
+      [criterionId],
+    );
+    if (!rows.length) return { criterionId, occurrences: [], count: 0 };
+
+    const criterion = SEMANTIC_CRITERIA[criterionId] ?? null;
+
+    // Trimmed on purpose: this is what the model reads, and twenty full
+    // transcripts would bury the thing they have in common. Two evidence quotes
+    // per occurrence is enough to show the shape of the failure.
+    const occurrences = rows.map((d: any) => ({
+      conversationId: d.conversation_id,
+      caller: d.caller_name || d.caller_phone || 'Unknown caller',
+      site: d.site_hint || null,
+      at: d.started_at,
+      severity: d.severity,
+      summary: d.summary,
+      cmmsRecordExists: Boolean(d.cmms_sr_id),
+      evidence: JSON.parse(d.evidence || '[]').slice(0, 2),
+    }));
+
+    return {
+      criterionId,
+      clauseRef: rows[0].clause_ref,
+      requires: criterion?.requires ?? null,
+      count: rows.length,
+      openCount: rows.filter((d: any) => d.status === 'open').length,
+      sites: Array.from(new Set(rows.map((d: any) => d.site_hint).filter(Boolean))),
+      withoutRecord: rows.filter((d: any) => !d.cmms_sr_id).length,
+      // The finding this fix will be filed against — the worst, then the oldest.
+      representativeId: rows
+        .slice()
+        .sort(
+          (a: any, b: any) =>
+            (SEVERITY_RANK[a.severity] ?? 9) - (SEVERITY_RANK[b.severity] ?? 9) ||
+            String(a.detected_at).localeCompare(String(b.detected_at)),
+        )[0].id,
+      occurrences,
+    };
   },
 });
 

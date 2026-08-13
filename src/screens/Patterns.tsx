@@ -3,6 +3,7 @@ import { api, vibe, type DeviationWithEvidence } from '../lib/vibe';
 import { BootSkeleton } from './BootSkeleton';
 import { LoadError } from '../components/Chrome';
 import { label, rootCauseTone } from '../lib/tone';
+import { proposePatternFix, JudgeTimeout } from '../lib/judges';
 import criteriaSeed from '../../evals/criteria.seed.json';
 import { page } from '../lib/layout';
 
@@ -196,7 +197,12 @@ export function Patterns({
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginTop: 22 }}>
         {patterns.map((p) => (
-          <PatternCard key={p.criterionId} p={p} onOpenDeviation={onOpenDeviation} />
+          <PatternCard
+            key={p.criterionId}
+            p={p}
+            onOpenDeviation={onOpenDeviation}
+            onProposed={() => setNonce((n) => n + 1)}
+          />
         ))}
 
         {patterns.length === 0 && (
@@ -248,10 +254,47 @@ export function Patterns({
 function PatternCard({
   p,
   onOpenDeviation,
+  onProposed,
 }: {
   p: Pattern;
   onOpenDeviation?: (deviationId: string) => void;
+  onProposed?: () => void;
 }) {
+  const [proposing, setProposing] = useState(false);
+  const [proposeError, setProposeError] = useState<string | null>(null);
+
+  /**
+   * Ask the proposer for one fix covering every occurrence.
+   *
+   * A timeout is not a fix and is never shown as one — it surfaces as an
+   * honest "could not reach the proposer", and nothing is written.
+   */
+  async function runProposer() {
+    setProposing(true);
+    setProposeError(null);
+    try {
+      const ctx = await api.patternContext(p.criterionId);
+      if (!ctx.occurrences?.length) throw new Error('This pattern has no occurrences to read.');
+      const fix = await proposePatternFix(ctx);
+      await api.saveCorrection(
+        ctx.representativeId ?? p.representative.id,
+        p.rootCause === 'unknown' ? 'unknown' : p.rootCause,
+        JSON.stringify(fix),
+      );
+      onProposed?.();
+    } catch (err) {
+      setProposeError(
+        err instanceof JudgeTimeout
+          ? 'The proposer did not respond. Nothing was written — try again.'
+          : err instanceof Error
+            ? err.message
+            : String(err),
+      );
+    } finally {
+      setProposing(false);
+    }
+  }
+
   const rc = rootCauseTone(p.rootCause);
   const peak = Math.max(...p.bars, 1);
   // The design's own rule: a pattern worth fixing at source is one that has
@@ -466,7 +509,8 @@ function PatternCard({
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 'auto' }}>
               <button
-                onClick={() => onOpenDeviation?.(p.representative.id)}
+                onClick={p.fix ? () => onOpenDeviation?.(p.representative.id) : runProposer}
+                disabled={proposing}
                 style={{
                   height: 34,
                   padding: '0 15px',
@@ -487,13 +531,18 @@ function PatternCard({
                     <polyline points="20 6 9 17 4 12" />
                   </svg>
                 )}
-                {applied ? 'Fix applied' : p.fix ? 'Review the fix' : 'Fix at source'}
+                {proposing ? 'Drafting the fix…' : applied ? 'Fix applied' : p.fix ? 'Review the fix' : 'Fix at source'}
               </button>
               <span style={{ fontSize: 12, color: 'var(--ink-600)' }}>
                 clears <strong>{p.openCount}</strong> open{' '}
                 {p.openCount === 1 ? 'intervention' : 'interventions'}
               </span>
             </div>
+            {proposeError && (
+              <div style={{ fontSize: 12, color: 'var(--danger-700)', lineHeight: '18px' }}>
+                {proposeError}
+              </div>
+            )}
           </div>
         ) : (
           <div style={{ padding: '16px 22px', display: 'flex', flexDirection: 'column', gap: 8 }}>

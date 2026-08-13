@@ -393,6 +393,21 @@ export const api = {
       },
     ),
 
+  /**
+   * Every occurrence of one criterion, for the pattern-level fix proposer.
+   * No model work — the model call happens in the browser afterwards.
+   */
+  patternContext: (criterionId: string) =>
+    call<import('./judges').PatternContext>('governance', 'patternContext', { criterionId }),
+
+  /** Persist a proposal the browser-side judges produced. */
+  saveCorrection: (deviationId: string, rootCause: string, proposalJson: string) =>
+    call<{ correctionId: string; deviationId: string; target: string; title: string }>(
+      'governance',
+      'saveCorrection',
+      { deviationId, rootCause, proposalJson },
+    ),
+
   /** Join to the real CMMS record and run the deterministic checks against it. */
   evaluate: (conversationId: string) =>
     call<{

@@ -230,6 +230,59 @@ export async function classifyRootCause(ctx: JudgeContext): Promise<RootCauseVer
   return v;
 }
 
+/** One pattern's worth of context, from the `patternContext` handler. */
+export interface PatternContext {
+  criterionId: string;
+  clauseRef?: string;
+  requires?: string | null;
+  count: number;
+  openCount?: number;
+  sites?: string[];
+  withoutRecord?: number;
+  representativeId?: string;
+  occurrences: Array<{
+    conversationId: string;
+    caller: string;
+    site: string | null;
+    severity: string;
+    summary: string;
+    cmmsRecordExists: boolean;
+    evidence: Array<{ at: string; who: string; quote: string; isViolation: boolean }>;
+  }>;
+}
+
+/**
+ * Propose ONE fix for a whole pattern.
+ *
+ * The per-deviation proposer answers "how do we repair this call". This asks a
+ * different question — "what single change stops all N of these" — so the model
+ * is given every occurrence at once rather than one, and told plainly that a
+ * fix which only repairs one call is the wrong answer.
+ *
+ * It runs here, in the browser, for the same reason the other judges do: a
+ * Studio Function's fetch aborts at ~10s and this prompt is larger than any of
+ * them. The result is persisted by the server through `saveCorrection`, which
+ * re-validates it — the browser proposes, it does not decide.
+ */
+export async function proposePatternFix(ctx: PatternContext): Promise<CorrectionProposal> {
+  const v = await runAgent<CorrectionProposal>(AGENTS.proposer, {
+    task: 'pattern_fix',
+    instruction:
+      `This criterion has failed on ${ctx.count} separate calls. Propose ONE change that prevents ` +
+      `all of them, at the source. A fix that only repairs a single call is the wrong answer here. ` +
+      `Say plainly where the change belongs — the agent prompt, a data mapping, or the scope of work itself.`,
+    criterion: { id: ctx.criterionId, clauseRef: ctx.clauseRef, requires: ctx.requires },
+    occurrenceCount: ctx.count,
+    sitesAffected: ctx.sites ?? [],
+    occurrencesWithNoCmmsRecord: ctx.withoutRecord ?? 0,
+    occurrences: ctx.occurrences,
+  });
+  if (['prompt', 'mapping', 'sow', 'human'].indexOf(v?.target) < 0) {
+    throw new JudgeInvalid(`Pattern proposer returned an unusable target: ${v?.target}`);
+  }
+  return v;
+}
+
 export async function proposeCorrection(ctx: JudgeContext): Promise<CorrectionProposal> {
   const v = await runAgent<CorrectionProposal>(AGENTS.proposer, ctx);
   if (['prompt', 'mapping', 'sow', 'human'].indexOf(v?.target) < 0) {
