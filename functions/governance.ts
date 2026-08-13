@@ -674,8 +674,17 @@ server.addHandler({
   execute: async (args) => {
     const db = connect();
     const limit = Math.min(Number(args.limit) || 50, 200);
+    // `snippet` is the caller's opening line — what the call was actually about.
+    // The list shows it under the caller's name, and it is read from the stored
+    // transcript rather than summarised, so the row quotes the caller verbatim.
     const { rows } = db.query(
-      `select c.*, (select count(*) from deviations d where d.conversation_id = c.id) as deviation_count
+      `select c.*,
+              (select count(*) from deviations d where d.conversation_id = c.id) as deviation_count,
+              (select t.message
+                 from transcript_turns t
+                where t.conversation_id = c.id and t.performer = 'caller'
+                order by t.turn_index
+                limit 1) as snippet
          from conversations c
         where c.id <> '__seed__'
         order by c.started_at desc
@@ -726,13 +735,19 @@ server.addHandler({
     const deviations = db.query('select * from deviations where conversation_id = $1', [id]).rows;
 
     // Ground truth, fetched live at read time.
+    //
+    // The filter must be `id(equals)=N`, the same verified syntax the join
+    // itself uses above. A bare `id=N` is not accepted: the connector returns a
+    // payload with no rows, which read as "no service request exists" for every
+    // call — showing the missing-record panel over records that were really
+    // there.
     let cmmsRecord: any = null;
     if (convo.cmms_sr_id) {
       const payload = await cmms('list-service-requests', {
         page_size: 1,
         page: 1,
         expand: 'site,requester',
-        filters: `id=${convo.cmms_sr_id}`,
+        filters: `id(equals)=${convo.cmms_sr_id}`,
       });
       cmmsRecord = rowsOf(payload)[0] ?? null;
     }

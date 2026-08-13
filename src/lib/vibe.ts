@@ -95,6 +95,8 @@ export interface ConversationRow {
   eval_status: string;
   quality_score: number | null;
   deviation_count?: number;
+  /** The caller's opening line, for the list row's second line. */
+  snippet?: string | null;
 }
 
 export interface DeviationRow {
@@ -142,8 +144,19 @@ export interface TranscriptTurnRow {
 
 const asBool = (v: unknown) => v === true || v === 'true';
 
-function toTurn(r: TranscriptTurnRow): TranscriptTurn {
-  const turn: TranscriptTurn = {
+/**
+ * The arguments a tool was called with and the result it returned. Both are
+ * stored and both are shown on the call detail, but `ToolCall` in the frozen
+ * contract carries neither, so they ride alongside the turn instead of being
+ * bolted into it — the same arrangement `DeviationWithEvidence` uses.
+ */
+export type TurnWithToolIO = TranscriptTurn & {
+  toolArgs?: string | null;
+  toolResult?: string | null;
+};
+
+function toTurn(r: TranscriptTurnRow): TurnWithToolIO {
+  const turn: TurnWithToolIO = {
     performer: (r.performer as TranscriptTurn['performer']) ?? 'system',
     message: r.message ?? '',
   };
@@ -155,11 +168,35 @@ function toTurn(r: TranscriptTurnRow): TranscriptTurn {
       resultRecordId: r.tool_record_id,
       error: r.tool_error,
     };
+    turn.toolArgs = r.tool_args;
+    turn.toolResult = r.tool_result;
   }
   return turn;
 }
 
-export function toConversation(r: ConversationRow, turns: TranscriptTurnRow[] = []): Conversation {
+/**
+ * A conversation plus the three things Hue stores that the frozen contract has
+ * no room for: the tool arguments and results on each turn, the caller's
+ * opening line, and how many findings the call carries. It widens
+ * `Conversation` rather than replacing it, so anything typed against the
+ * contract still accepts one.
+ */
+export type ConversationView = Conversation & {
+  transcript: TurnWithToolIO[];
+  snippet: string | null;
+  deviationCount: number;
+  /**
+   * The reference the agent read back to the caller. Distinct from
+   * `srRecordId`, which is the record the join actually resolved — when the
+   * agent invents a number, this is set and that one is not.
+   */
+  srNumberClaimed: string | null;
+};
+
+export function toConversation(
+  r: ConversationRow,
+  turns: TranscriptTurnRow[] = [],
+): ConversationView {
   return {
     id: r.id,
     callId: r.call_id,
@@ -176,6 +213,9 @@ export function toConversation(r: ConversationRow, turns: TranscriptTurnRow[] = 
     evalStatus: (r.eval_status as Conversation['evalStatus']) ?? 'not_evaluated',
     qualityScore: r.quality_score ?? null,
     transcript: turns.map(toTurn),
+    snippet: r.snippet ?? null,
+    deviationCount: Number(r.deviation_count ?? 0),
+    srNumberClaimed: r.sr_number_claimed || null,
   };
 }
 
@@ -244,7 +284,7 @@ export const api = {
       { pageSize, page, filters },
     ),
 
-  listConversations: async (limit = 50): Promise<Conversation[]> => {
+  listConversations: async (limit = 50): Promise<ConversationView[]> => {
     const { items } = await call<{ items: ConversationRow[] }>(
       'governance',
       'listConversations',
@@ -256,7 +296,7 @@ export const api = {
   getConversation: async (
     id: string,
   ): Promise<{
-    conversation: Conversation;
+    conversation: ConversationView;
     deviations: DeviationWithEvidence[];
     /** Fetched live from the CMMS at read time, not cached. */
     cmmsRecord: Record<string, unknown> | null;
