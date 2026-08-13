@@ -1146,7 +1146,54 @@ server.addHandler({
     if (!ok) throw new Error(`Judge returned an unusable verdict: ${JSON.stringify(verdict).slice(0, 200)}`);
 
     if (verdict.verdict !== 'fail') {
-      return { conversationId: convoId, criterionId, verdict: verdict.verdict, recorded: false };
+      // Retract a finding this criterion no longer makes.
+      //
+      // Re-grading is normal — a judge is re-run after a timeout, or after the
+      // record it reads has changed — and without this a fail recorded once
+      // stays open for ever, even as the judge now passes the call. The
+      // deterministic layer retracts its own findings for the same reason.
+      //
+      // Scope matches that layer: only this criterion, only semantic findings,
+      // only while still open, and never one a correction has been proposed
+      // against, since deleting that would cascade the correction away.
+      const prior = db.query(
+        `select id from deviations
+          where conversation_id = $1 and criterion_id = $2
+            and detected_by = 'semantic' and status = 'open'
+          limit 1`,
+        [convoId, criterionId],
+      ).rows[0];
+
+      let retracted = false;
+      if (prior) {
+        const hasCorrection = db.query(
+          'select id from corrections where deviation_id = $1 limit 1',
+          [prior.id],
+        ).rows[0];
+        if (!hasCorrection) {
+          db.query('delete from deviations where id = $1', [prior.id]);
+          retracted = true;
+
+          // The call may have been the only thing keeping it flagged.
+          const openNow = Number(
+            db.query(
+              "select count(*) as n from deviations where conversation_id = $1 and status = 'open'",
+              [convoId],
+            ).rows[0]?.n ?? 0,
+          );
+          if (!openNow) {
+            db.query("update conversations set eval_status='passed' where id=$1", [convoId]);
+          }
+        }
+      }
+
+      return {
+        conversationId: convoId,
+        criterionId,
+        verdict: verdict.verdict,
+        recorded: false,
+        retracted,
+      };
     }
 
     const severity =
@@ -1679,6 +1726,216 @@ server.addHandler({
         retryable: message.indexOf(JUDGE_TIMEOUT) === 0,
       };
     }
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Detection judges, browser-side
+//
+// Same split the correction loop already uses, and for the same reason: a
+// Studio Function's fetch aborts at ~10s, and the conformance judge routinely
+// takes longer than that on a full transcript. CR-CAT-01 timed out on nearly
+// every call for exactly this — not load, and not something spacing the calls
+// out could fix, since `run-agent-chat` blocks for as long as the model needs
+// and the ceiling applies per request.
+//
+// So the model call moves to the browser, where `vibe.executeAgent` has no such
+// cap. Only the model call moves. Reading the transcript, fetching the live
+// CMMS record, validating the verdict and writing the deviation all stay here,
+// where each takes about a second. The browser decides nothing — it relays a
+// verdict that this file re-validates before it is allowed to become a finding.
+//
+// `evaluateSemantic` above is kept as the server-side path. It still works for
+// any judge that answers inside the ceiling, and its degrade-on-timeout
+// behaviour is the safety net: a judge that never answers is UNKNOWN, and is
+// never recorded as a pass.
+// ---------------------------------------------------------------------------
+
+server.addHandler({
+  name: 'semanticContext',
+  description:
+    'Everything the browser needs to grade ONE semantic criterion: the criterion, the transcript, and the LIVE CMMS record. No model call — fast and never at risk of a timeout.',
+  parameters: {
+    conversationId: { description: 'Conversation id', type: 'string' },
+    criterionId: { description: 'One of CR-LOG-01, CR-LOG-04, CR-SCHED-01, CR-CAT-01', type: 'string' },
+  },
+  execute: async (args) => {
+    const convoId = String(args.conversationId ?? '').trim();
+    const criterionId = String(args.criterionId ?? '').trim();
+    const criterion = SEMANTIC_CRITERIA[criterionId];
+    if (!criterion) throw new Error(`Unknown semantic criterion ${criterionId}`);
+
+    const db = connect();
+    const convo = db.query('select * from conversations where id = $1 limit 1', [convoId]).rows[0];
+    if (!convo) throw new Error(`No conversation ${convoId}`);
+
+    // Same guard as the server-side path: where the deterministic layer already
+    // found this criterion failing, a judge has nothing to add and would
+    // overwrite exact evidence with a reading of it.
+    const alreadyDeterministic = db.query(
+      `select id from deviations
+        where conversation_id = $1 and criterion_id = $2 and detected_by = 'deterministic'
+        limit 1`,
+      [convoId, criterionId],
+    ).rows[0];
+    if (alreadyDeterministic) return { skip: 'already_caught_deterministically' };
+
+    const turns = db.query(
+      'select * from transcript_turns where conversation_id = $1 order by turn_index',
+      [convoId],
+    ).rows;
+
+    let cmmsRecord: any = null;
+    if (convo.cmms_sr_id) {
+      const payload = await cmms('list-service-requests', {
+        page_size: 1,
+        page: 1,
+        expand: 'site,requester',
+        filters: `id(equals)=${convo.cmms_sr_id}`,
+      });
+      cmmsRecord = rowsOf(payload)[0] ?? null;
+    }
+
+    return {
+      skip: null,
+      criterion: { id: criterionId, clauseRef: criterion.clauseRef, requires: criterion.requires },
+      transcript: turns.map((t: any) => ({
+        performer: t.performer,
+        at: t.at_offset,
+        message: t.tool_name
+          ? `TOOL ${t.tool_name} -> ${t.tool_status}${t.tool_args ? ` | args: ${t.tool_args}` : ''}${t.tool_result ? ` | result: ${t.tool_result}` : ''}${t.tool_error ? ` | error: ${t.tool_error}` : ''}`
+          : t.message,
+      })),
+      cmmsRecord: cmmsRecord
+        ? {
+            id: cmmsRecord.id,
+            subject: cmmsRecord.subject,
+            description: cmmsRecord.description,
+            site: cmmsRecord.site?.name ?? null,
+            urgency: cmmsRecord.urgency ?? null,
+            status: cmmsRecord.moduleState ?? null,
+            createdTime: cmmsRecord.sysCreatedTime ?? null,
+          }
+        : null,
+    };
+  },
+});
+
+server.addHandler({
+  name: 'saveSemanticVerdict',
+  description:
+    'Persist a semantic verdict produced by the browser-side judge. Validates before writing — nothing here trusts the client.',
+  parameters: {
+    conversationId: { description: 'Conversation id', type: 'string' },
+    criterionId: { description: 'Semantic criterion id', type: 'string' },
+    verdict: { description: 'pass | fail | not_applicable', type: 'string' },
+    severity: { description: 'critical | high | medium | low', type: 'string' },
+    summary: { description: 'One-line statement of the finding', type: 'string' },
+    evidenceJson: { description: 'Evidence array, as a JSON string', type: 'string' },
+  },
+  execute: async (args) => {
+    const convoId = String(args.conversationId ?? '').trim();
+    const criterionId = String(args.criterionId ?? '').trim();
+    const criterion = SEMANTIC_CRITERIA[criterionId];
+    if (!criterion) throw new Error(`Unknown semantic criterion ${criterionId}`);
+
+    const verdictName = String(args.verdict ?? '').trim();
+    if (['pass', 'fail', 'not_applicable'].indexOf(verdictName) < 0) {
+      throw new Error(`Unusable verdict "${verdictName}" — expected pass, fail or not_applicable.`);
+    }
+
+    const db = connect();
+    const convo = db.query('select * from conversations where id = $1 limit 1', [convoId]).rows[0];
+    if (!convo) throw new Error(`No conversation ${convoId}`);
+
+    // The deterministic layer owns this criterion on this call — refuse rather
+    // than overwrite it.
+    const alreadyDeterministic = db.query(
+      `select id from deviations
+        where conversation_id = $1 and criterion_id = $2 and detected_by = 'deterministic'
+        limit 1`,
+      [convoId, criterionId],
+    ).rows[0];
+    if (alreadyDeterministic) {
+      return { conversationId: convoId, criterionId, recorded: false, reason: 'already_caught_deterministically' };
+    }
+
+    const prior = db.query(
+      `select id from deviations
+        where conversation_id = $1 and criterion_id = $2 and detected_by = 'semantic'
+        limit 1`,
+      [convoId, criterionId],
+    ).rows[0];
+
+    let recorded = false;
+    let retracted = false;
+
+    if (verdictName === 'fail') {
+      const severity =
+        ['critical', 'high', 'medium', 'low'].indexOf(String(args.severity)) >= 0
+          ? String(args.severity)
+          : 'medium';
+      const summary = String(args.summary ?? '').trim();
+      if (!summary) throw new Error('A failing verdict must carry a summary.');
+
+      let evidence = '[]';
+      try {
+        const parsed = JSON.parse(String(args.evidenceJson ?? '[]'));
+        evidence = JSON.stringify(Array.isArray(parsed) ? parsed : []);
+      } catch {
+        evidence = '[]';
+      }
+
+      const devId = prior?.id ?? `DV-${convoId}-${criterionId}`;
+      if (prior) {
+        db.query(
+          `update deviations set summary=$2, severity=$3, checked_sr_id=$4, evidence=$5,
+             detected_by='semantic' where id=$1`,
+          [devId, summary, severity, String(convo.cmms_sr_id ?? ''), evidence],
+        );
+      } else {
+        db.query(
+          `insert into deviations
+             (id, conversation_id, criterion_id, clause_ref, summary, severity, root_cause,
+              status, detected_at, detected_by, checked_sr_id, evidence)
+           values ($1,$2,$3,$4,$5,$6,'unknown','open',$7,'semantic',$8,$9)`,
+          [
+            devId,
+            convoId,
+            criterionId,
+            criterion.clauseRef,
+            summary,
+            severity,
+            nowIso(),
+            String(convo.cmms_sr_id ?? ''),
+            evidence,
+          ],
+        );
+      }
+      recorded = true;
+    } else if (prior) {
+      // Retract a finding this criterion no longer makes — same rule as the
+      // other paths, and never one a correction has been proposed against.
+      const hasCorrection = db.query('select id from corrections where deviation_id = $1 limit 1', [
+        prior.id,
+      ]).rows[0];
+      if (!hasCorrection) {
+        db.query('delete from deviations where id = $1', [prior.id]);
+        retracted = true;
+      }
+    }
+
+    const openNow = Number(
+      db.query("select count(*) as n from deviations where conversation_id = $1 and status = 'open'", [
+        convoId,
+      ]).rows[0]?.n ?? 0,
+    );
+    db.query('update conversations set eval_status=$2 where id=$1', [
+      convoId,
+      openNow ? 'flagged' : 'passed',
+    ]);
+
+    return { conversationId: convoId, criterionId, verdict: verdictName, recorded, retracted, openNow };
   },
 });
 

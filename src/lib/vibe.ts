@@ -335,6 +335,40 @@ export const api = {
     return items.map(withExtras);
   },
 
+  /**
+   * The two halves of a browser-side semantic evaluation. The model call
+   * happens between them, in the browser, because it exceeds a Studio
+   * Function's ~10s fetch ceiling.
+   */
+  semanticContext: (conversationId: string, criterionId: string) =>
+    call<{
+      skip: string | null;
+      criterion?: { id: string; clauseRef: string; requires: string };
+      transcript?: Array<{ performer: string; at: string | null; message: string }>;
+      cmmsRecord?: Record<string, unknown> | null;
+    }>('governance', 'semanticContext', { conversationId, criterionId }),
+
+  saveSemanticVerdict: (v: {
+    conversationId: string;
+    criterionId: string;
+    verdict: string;
+    severity?: string;
+    summary?: string;
+    evidenceJson?: string;
+  }) =>
+    call<{ recorded: boolean; retracted: boolean; openNow: number }>(
+      'governance',
+      'saveSemanticVerdict',
+      {
+        conversationId: v.conversationId,
+        criterionId: v.criterionId,
+        verdict: v.verdict,
+        severity: v.severity ?? '',
+        summary: v.summary ?? '',
+        evidenceJson: v.evidenceJson ?? '[]',
+      },
+    ),
+
   /** Join to the real CMMS record and run the deterministic checks against it. */
   evaluate: (conversationId: string) =>
     call<{

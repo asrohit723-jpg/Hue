@@ -5,8 +5,15 @@ import {
   type DeviationWithEvidence,
   type TurnWithToolIO,
 } from '../lib/vibe';
+import { runSemanticSuite } from '../lib/judges';
 import { BootSkeleton } from './BootSkeleton';
 import { LoadError } from '../components/Chrome';
+
+/**
+ * Calls whose semantic criteria have already been graded in this page session.
+ * Module-level so it survives remounts as the user moves between calls.
+ */
+const gradedThisSession = new Set<string>();
 import { avatarColor, clock, duration, evalTone, initials, label, sentimentTone } from '../lib/tone';
 
 /**
@@ -107,7 +114,30 @@ export function ConversationDetail({
       setError(null);
       try {
         const res = await api.getConversation(id);
-        if (!cancelled) setData(res);
+        if (cancelled) return;
+        setData(res);
+
+        // Finish grading this call here, in the browser.
+        //
+        // The semantic judges cannot run inside a Studio Function: its fetch
+        // aborts at ~10s and the conformance judge measures 15-20s on a real
+        // transcript, so server-side it times out and records nothing. Run from
+        // here — the same place the correction-loop judges already run — it has
+        // no ceiling. Only the model call is here; the server still supplies
+        // the context and still validates and writes the verdict.
+        //
+        // Once per call per page load: a passing verdict is not stored (there
+        // is no table to store it in, and the DB role cannot create one), so
+        // "ungraded" and "graded, passed" are indistinguishable on reload. The
+        // guard keeps a revisit within a session from re-billing the model.
+        if (!gradedThisSession.has(id)) {
+          gradedThisSession.add(id);
+          await runSemanticSuite(id);
+          if (cancelled) return;
+          // Re-read so any new finding appears in the evaluation panel.
+          const fresh = await api.getConversation(id);
+          if (!cancelled) setData(fresh);
+        }
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
       }
