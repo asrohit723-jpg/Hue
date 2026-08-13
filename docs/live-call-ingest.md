@@ -21,6 +21,42 @@ no header and no key anywhere in this repo or the bundle.
 `get-call-recording` and `get-call-stats` are available but unused; there is no
 audio player, and the stats are already derivable from what is stored.
 
+## Tool calls — wired, dormant, blocked on one id
+
+`helpdesk-agent-tools.get-call-tool-calls` would close the one real gap in live
+evidence: voice transcripts are speech only, so nothing records what the agent's
+tooling actually attempted. It is reachable as `governance.callToolCalls` and
+nothing calls it automatically, because it cannot resolve any of our calls.
+
+Tested, not assumed:
+
+- The action takes `threadId`, documented as the call log's `facilioThreadId`,
+  and reads `/api/agentChat/getThreadMessages`.
+- **All eleven** live calls are rejected — `Thread Id N not found` for 34111,
+  34099, 34095, 34094, 34089, 33942, 33937, 33927, 33913, 33911 and 33481.
+- The action itself is healthy: an AI Studio agent-chat thread returns `200`
+  with `{"message": []}`.
+- `facilioThreadId` is the only thread id a call log carries, and the voice
+  agent (`facilioAgentId` 6208) is itself `Agent not found` in AI Studio.
+
+So the voice channel's threads are not in the agent-chat namespace this endpoint
+reads. **What is needed from the platform team: the thread id that addresses a
+voice call there** — one working id, for any of these calls.
+
+To verify it the moment that arrives:
+
+```sh
+facilio vibe function run governance callToolCalls --args '{"threadId":"<id>"}'
+```
+
+That returns the raw messages unmapped. The output schema is unpublished and no
+populated response has ever been observed, so field names for the tool name,
+arguments, result and error are still unknown — they will be read off that
+response rather than guessed, and only then will anything render.
+
+Until then the detail screen shows no tool-call panel for a live call. A panel
+that is empty on every real call would be worse than none.
+
 ## The watermark, and why it is not a timestamp
 
 `list-call-logs` has no `since`/`from` parameter, so the watermark cannot be
@@ -65,6 +101,32 @@ of which had to be handled rather than assumed:
    `site_hint` *only when it is empty* — which is exactly the live case. A
    seeded call's hint is the site as the agent understood it, which is evidence
    in its own right, and is never overwritten.
+
+## "Confirmed but no record", without a tool-call log
+
+With no tool-call evidence available, the deterministic CR-LOG-01 check is built
+from the three things that are real today: what the agent SAID, the reference it
+read back, and the live CMMS join. The claim is derived from the transcript at
+evaluation time rather than from the stored `sr_claimed` flag, so the exact
+sentence that made the promise becomes the evidence on the finding, and a
+re-evaluation can correct an earlier reading.
+
+Reading the claim carefully is the whole job, because a keyword test gets it
+wrong in both directions:
+
+- **An admission of failure is not a claim.** "I'm having trouble logging this,
+  our team will call you back" contains *logging*, and a naive match would
+  record it as a false confirmation — describing an honest agent as a lying one.
+  Those calls still breach the clause, and the semantic judge still flags them;
+  they are simply not this check's to make.
+- **A promise is not a confirmation.** "I'll log that for you" states an
+  intention; "that's been logged" states a fact. Only the second is a claim.
+- **Only the agent can claim.** A caller saying "you logged it last week" is
+  evidence about a previous call, not this one.
+
+Against the live data this separates cleanly: all six calls where the agent
+confirmed a reference have a matching CMMS record, and the three where it
+admitted failure are correctly not treated as confirmations.
 
 ## Joining a live call to its service request
 

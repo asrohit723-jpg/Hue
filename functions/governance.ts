@@ -68,6 +68,25 @@ function rowsOf(payload: any): any[] {
  */
 const CALL_LOGS = 'helpdesk-call-logs';
 
+/** The agent's run history for a call. Dormant — see `callToolCalls`. */
+const AGENT_TOOLS = 'helpdesk-agent-tools';
+
+async function agentTools(actionSlug: string, input: Record<string, unknown>): Promise<any> {
+  const res = await fetch(
+    `${process.system.CONNECTIONS_URL}/api/v1/connections/${AGENT_TOOLS}/actions/${actionSlug}/execute`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(`Agent tools ${actionSlug} failed: ${res.status} ${res.statusText}`);
+  }
+  const body = await res.json();
+  return body?.output ?? body?.result ?? body;
+}
+
 async function callLogs(actionSlug: string, input: Record<string, unknown>): Promise<any> {
   const res = await fetch(
     `${process.system.CONNECTIONS_URL}/api/v1/connections/${CALL_LOGS}/actions/${actionSlug}/execute`,
@@ -157,6 +176,72 @@ function spokenSrNumber(turns: Array<{ performer: string; message: string }>): s
     if (matches && matches.length) return matches[0];
   }
   return null;
+}
+
+/**
+ * What the agent told the caller about logging their request.
+ *
+ * This is the claim side of "confirmed but no record", established from the
+ * transcript because the voice channel exposes no tool-call log to corroborate
+ * it. What the caller was told is what the caller acts on, so it is legitimate
+ * evidence in its own right — but only if read carefully:
+ *
+ *   - An admission of FAILURE is not a claim. "I'm having trouble logging this,
+ *     our team will call you back" contains "logging" and would match a naive
+ *     keyword test, yet the agent was being honest and nothing was falsely
+ *     promised. Those calls are still a breach of the clause — the fault goes
+ *     unlogged — but they are the judge's to find, not this check's, and
+ *     recording them here as a false confirmation would misdescribe them.
+ *   - A future promise is not a confirmation. "I'll log that for you" states an
+ *     intention; "that's been logged" states a fact.
+ *   - Only the AGENT can make this claim. A caller saying "you logged it last
+ *     week" is not evidence of anything this call did.
+ */
+function agentClaim(turns: Array<{ performer: string; message: string; at_offset?: string }>): {
+  claimed: boolean;
+  number: string | null;
+  quotes: Array<{ at: string; message: string }>;
+  admittedFailure: boolean;
+} {
+  const agentTurns = turns.filter((t) => t.performer === 'agent');
+
+  // Said plainly: it is done. Present/past tense only.
+  const CONFIRMS =
+    /\b(has been|have been|is|was|were)\s+(logged|raised|created|registered|booked)\b|\b(logged|raised|created|registered|booked)\s+(it|this|that|the request|your request)\b|\byour (service request|request|ticket|reference)\s*(id|number)?\s*(is|:)\b|\ball set\b|\bdone\b\s*[—-]/i;
+
+  // Said plainly: it did not work.
+  const ADMITS_FAILURE =
+    /\b(trouble|unable|can'?t|cannot|could ?n'?t|failed|couldn't manage)\b[^.!?]{0,40}\b(log|logging|raise|raising|creat|register)/i;
+
+  let admittedFailure = false;
+  const quotes: Array<{ at: string; message: string }> = [];
+
+  for (const t of agentTurns) {
+    const text = String(t.message ?? '');
+    if (ADMITS_FAILURE.test(text)) {
+      admittedFailure = true;
+      continue;
+    }
+    if (CONFIRMS.test(text)) quotes.push({ at: String(t.at_offset ?? ''), message: text });
+  }
+
+  // A reference read back is the strongest possible confirmation — the agent
+  // handed the caller a number to quote.
+  const number = spokenSrNumber(agentTurns.map((t) => ({ performer: 'agent', message: t.message })));
+  if (number && !quotes.length) {
+    const naming = agentTurns.find((t) =>
+      String(t.message ?? '')
+        .replace(/\d(?:[\s-]+\d){2,}/g, (run) => run.replace(/[\s-]+/g, ''))
+        .includes(number),
+    );
+    if (naming) quotes.push({ at: String(naming.at_offset ?? ''), message: String(naming.message) });
+  }
+
+  // An admission of failure withdraws the claim: if the agent said both, the
+  // last word on the matter is that it did not work.
+  const claimed = quotes.length > 0 && !(admittedFailure && !number);
+
+  return { claimed, number: number ?? null, quotes, admittedFailure };
 }
 
 /** The connection's satisfactionLevel, mapped onto Hue's sentiment enum. */
@@ -582,26 +667,61 @@ server.addHandler({
       evidence: any[];
     }> = [];
 
-    const srClaimed = asBool(convo.sr_claimed);
+    // What the agent actually told the caller, read from the transcript at
+    // evaluation time rather than taken from the stored sr_claimed flag.
+    //
+    // The flag is set once at ingest by a coarse keyword match; deriving the
+    // claim here makes the finding auditable — the exact sentence that made the
+    // promise becomes the evidence — and lets a re-evaluation correct an
+    // earlier misreading. The derived value is written back so the UI's
+    // "claimed" state agrees with what the check used.
+    const claim = agentClaim(turns);
+    const srClaimed = claim.claimed;
+    if (asBool(convo.sr_claimed) !== srClaimed) {
+      db.query('update conversations set sr_claimed=$2 where id=$1', [convoId, boolText(srClaimed)]);
+    }
 
     // CR-LOG-01 — a record must exist for what the caller reported.
+    //
+    // Three pieces of real evidence, and all three are needed before this
+    // fires: the agent SAID it logged something, a specific reference was or
+    // was not read back, and the live CMMS join found nothing. Tool-call logs
+    // would be a fourth, but the voice channel does not expose them (see
+    // `callToolCalls`), so the claim is established from speech alone — which
+    // is exactly what the caller was told and went away believing.
     if (srClaimed && !matched) {
+      const named = claim.number || String(convo.sr_number_claimed ?? '').trim();
+      const who = convo.caller_name || convo.caller_phone || 'the caller';
+
+      const evidence = [
+        ...claim.quotes.map((q) => ({
+          at: q.at,
+          who: 'agent',
+          quote: q.message,
+          isViolation: true,
+        })),
+        {
+          at: '',
+          who: 'CMMS',
+          quote: named
+            ? `Looked up service request ${named} in the CMMS: no such record.`
+            : 'Searched the CMMS for a service request from this call: none found.',
+          isViolation: true,
+        },
+      ];
+
       findings.push({
         criterionId: 'CR-LOG-01',
         clauseRef: 'S-2.1',
-        summary:
-          `The agent confirmed a service request to ${convo.caller_name || 'the caller'}, but no matching record exists in the CMMS. ` +
-          `The reported fault is still unlogged.`,
+        summary: named
+          ? `The agent read reference ${named} back to ${who}, but no such service request exists in the CMMS. ` +
+            `The caller is holding a reference number for a record that was never created.`
+          : `The agent told ${who} the request was logged, but no service request exists in the CMMS for this call, ` +
+            `and no reference was ever read back. The reported fault is still unlogged.`,
+        // A reference read back is the worse failure: the caller has something
+        // to quote, so the gap surfaces only when they chase it.
         severity: 'critical',
-        evidence: turns
-          .filter((t: any) => t.tool_name || String(t.message ?? '').length > 0)
-          .slice(-4)
-          .map((t: any) => ({
-            at: t.at_offset,
-            who: t.tool_name ? 'Tool call' : t.performer,
-            quote: t.tool_name ? `${t.tool_name} -> ${t.tool_status ?? 'unknown'}` : t.message,
-            isViolation: Boolean(t.tool_name && t.tool_status !== 'success'),
-          })),
+        evidence,
       });
     }
 
@@ -1724,6 +1844,94 @@ server.addHandler({
         rootCause,
         error: message,
         retryable: message.indexOf(JUDGE_TIMEOUT) === 0,
+      };
+    }
+  },
+});
+
+/**
+ * Agent tool calls for one call — WIRED BUT DORMANT.
+ *
+ * `helpdesk-agent-tools.get-call-tool-calls` would close the one real gap in
+ * live-call evidence: the voice channel's transcripts are speech only, so there
+ * is no record of what the agent's tooling actually attempted. With it,
+ * "confirmed but no record" could be proven by a failed create call rather than
+ * inferred from what the agent said.
+ *
+ * It cannot be switched on yet, and this is not a guess — every one of the 11
+ * live calls was tested:
+ *
+ *   - The action takes `threadId`, documented as the call log's
+ *     `facilioThreadId`, and reads /api/agentChat/getThreadMessages.
+ *   - Every call's facilioThreadId returns "Thread Id N not found" (tested:
+ *     34111, 34099, 34095, 34094, 34089, 33942, 33937, 33927, 33913, 33911,
+ *     33481 — all eleven).
+ *   - The action itself is healthy: an AI Studio agent-chat thread returns 200.
+ *   - facilioThreadId is the ONLY thread id a call log carries, and the voice
+ *     agent (facilioAgentId 6208) is itself "Agent not found" in AI Studio.
+ *
+ * So the voice channel's threads are not in the agent-chat namespace this
+ * endpoint reads. Nothing here calls it automatically — pointing the detail
+ * screen at it would render an empty panel on every real call. It stays
+ * reachable so that the moment the platform team supplies the correct
+ * voice-call thread id, one argument proves it end to end.
+ *
+ *   facilio vibe function run governance callToolCalls --args '{"threadId":<id>}'
+ */
+server.addHandler({
+  name: 'callToolCalls',
+  description:
+    'Agent tool calls for one call, via helpdesk-agent-tools. DORMANT: needs the correct voice-call thread id from the platform team — every call log facilioThreadId is rejected by the endpoint. Pass a threadId to test one.',
+  parameters: {
+    threadId: {
+      description: "The agent thread id. Omit to report why this is dormant without calling out.",
+      type: 'string',
+    },
+  },
+  execute: async (args) => {
+    const threadId = String(args.threadId ?? '').trim();
+
+    if (!threadId) {
+      return {
+        configured: false,
+        action: 'helpdesk-agent-tools.get-call-tool-calls',
+        needs: 'the thread id that addresses a VOICE call in the agent-chat namespace',
+        tested:
+          'All 11 live calls: facilioThreadId is rejected with "Thread Id N not found". The action is healthy — an AI Studio thread returns 200.',
+        toolCalls: [],
+        note: 'Nothing reads this yet. Supply a working threadId here to confirm the shape before anything renders it.',
+      };
+    }
+
+    try {
+      const payload = await agentTools('get-call-tool-calls', { threadId: Number(threadId) });
+      // The upstream reports "not found" as a 200 body carrying a 500, so a
+      // failure has to be recognised rather than assumed absent.
+      const upstreamError = payload?.status && Number(payload.status) >= 400;
+      if (upstreamError) {
+        return {
+          configured: false,
+          threadId,
+          upstream: { status: payload.status, message: payload.message ?? payload.error ?? '' },
+          toolCalls: [],
+        };
+      }
+      const messages = payload?.message ?? payload?.messages ?? payload?.data ?? [];
+      return {
+        configured: true,
+        threadId,
+        count: Array.isArray(messages) ? messages.length : 0,
+        // Returned raw and unmapped on purpose: the output schema is
+        // unpublished and no populated response has ever been seen, so there is
+        // nothing to map onto yet without inventing field names.
+        raw: messages,
+      };
+    } catch (err) {
+      return {
+        configured: false,
+        threadId,
+        error: err instanceof Error ? err.message : String(err),
+        toolCalls: [],
       };
     }
   },
