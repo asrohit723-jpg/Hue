@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { logout, type CurrentUser } from '../lib/vibe';
+import { HEADER_H } from '../lib/layout';
 import { Overview } from './Overview';
 import { Conversations } from './Conversations';
 import { ConversationDetail } from './ConversationDetail';
@@ -146,8 +147,8 @@ export function Shell({ me }: { me: CurrentUser }) {
       >
         <div
           style={{
-            height: 64,
-            flex: '0 0 64px',
+            height: HEADER_H,
+            flex: `0 0 ${HEADER_H}px`,
             display: 'flex',
             alignItems: 'center',
             gap: 12,
@@ -313,8 +314,8 @@ export function Shell({ me }: { me: CurrentUser }) {
         {/* TOP BAR */}
         <div
           style={{
-            height: 60,
-            flex: '0 0 60px',
+            height: HEADER_H,
+            flex: `0 0 ${HEADER_H}px`,
             background: '#fff',
             borderBottom: '1px solid var(--border-default)',
             display: 'flex',

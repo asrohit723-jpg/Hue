@@ -17,6 +17,18 @@
 export const PAGE_MAX = 1600;
 
 /**
+ * Header height, shared by the sidebar's brand block and the main top bar.
+ *
+ * The design gives these two different heights — 64px for the sidebar header,
+ * 60px for the top bar — so their bottom borders sat 4px apart and never formed
+ * one line across the window. One constant now, so they cannot drift again.
+ *
+ * 64 is the taller of the two and the one the brand lockup needs: two lines at
+ * 17px and 14px leave only 2px of breathing room inside 60.
+ */
+export const HEADER_H = 64;
+
+/**
  * The outer container style for a screen. `padding` stays per-screen because
  * the design specifies it per screen (24px 28px, 28px 32px, 22px 32px …).
  */
