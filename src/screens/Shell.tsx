@@ -517,7 +517,7 @@ export function Shell({ me }: { me: CurrentUser }) {
               onViewPattern={() => setScreen('patterns')}
             />
           )}
-          {screen === 'patterns' && <Patterns onOpenCriterion={() => setScreen('ints')} />}
+          {screen === 'patterns' && <Patterns onOpenDeviation={openDeviation} />}
           {screen === 'scope' && <ScopeEvals />}
           {screen === 'notify' && <Notifications onOpen={openDeviation} />}
         </div>
