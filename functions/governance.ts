@@ -1553,7 +1553,10 @@ server.addHandler({
         ],
       );
     }
-    db.query("update deviations set status='correcting' where id=$1", [id]);
+    // Drafting a correction does NOT change the finding. The deviation stays
+    // open until a correction is actually applied — see approveCorrection.
+    // Marking it 'correcting' here made the list read "Fix applied" over a
+    // correction still sitting in 'proposed'.
 
     return {
       correctionId: corrId,
@@ -1826,7 +1829,10 @@ server.addHandler({
            cmmsAction, nowIso()],
         );
       }
-      db.query("update deviations set status='correcting' where id=$1", [id]);
+      // Drafting a correction does NOT change the finding. The deviation stays
+    // open until a correction is actually applied — see approveCorrection.
+    // Marking it 'correcting' here made the list read "Fix applied" over a
+    // correction still sitting in 'proposed'.
 
       return {
         deviationId: id,
@@ -2154,6 +2160,46 @@ server.addHandler({
 });
 
 server.addHandler({
+  name: 'repairDeviationStatus',
+  description:
+    "Reconcile deviation.status with the correction actually attached to it. Fixes rows left 'correcting' by a proposal that was never applied. Idempotent; reports what it changed.",
+  parameters: {},
+  execute: async () => {
+    const db = connect();
+
+    // A deviation is only 'correcting' if its correction has genuinely been
+    // applied. Anything still proposed, rejected, or with no correction at all
+    // belongs back in 'open'. Resolved deviations are left alone — those were
+    // closed by the verify step, not by a proposal.
+    const { rows } = db.query(
+      `select d.id, d.status, c.state as corr_state, c.applied_at
+         from deviations d
+         left join corrections c on c.deviation_id = d.id
+        where d.id <> '__seed__' and d.status = 'correcting'`,
+    );
+
+    const repaired: Array<{ id: string; from: string; to: string; because: string }> = [];
+    for (const r of rows) {
+      const applied = r.corr_state === 'applied' || r.corr_state === 'verifying' || r.corr_state === 'resolved';
+      if (applied) continue;
+      db.query("update deviations set status='open' where id=$1", [r.id]);
+      repaired.push({
+        id: r.id,
+        from: 'correcting',
+        to: 'open',
+        because: r.corr_state ? `its correction is still '${r.corr_state}'` : 'it has no correction',
+      });
+    }
+
+    const after = db.query(
+      "select status, count(*) as n from deviations where id <> '__seed__' group by status",
+    ).rows;
+
+    return { checked: rows.length, repaired, statuses: after };
+  },
+});
+
+server.addHandler({
   name: 'getCorrection',
   description:
     'The correction attached to one deviation, or null. Read on load so the before/after diff and the applied → verifying → resolved progression survive a refresh.',
@@ -2266,11 +2312,12 @@ server.addHandler({
       throw new Error(`Rejected: cmmsAction.verb must be create|update|none, got "${verb}"`);
     }
 
-    db.query('update deviations set root_cause=$2, status=$3 where id=$1', [
-      id,
-      rootCause,
-      'correcting',
-    ]);
+    // The root cause is a real conclusion and is recorded. The STATUS is not
+    // touched: a drafted proposal is not an applied fix, and setting
+    // 'correcting' here made the Interventions list report "Fix applied" over a
+    // correction still in 'proposed'. Only approveCorrection moves the status,
+    // after the write to the CMMS has actually happened.
+    db.query('update deviations set root_cause=$2 where id=$1', [id, rootCause]);
 
     const corrId = `CO-${id}`;
     const cmmsAction = JSON.stringify(p.cmmsAction ?? {});
