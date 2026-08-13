@@ -157,6 +157,13 @@ const STATEMENTS: string[] = [
   `CREATE INDEX IF NOT EXISTS notifications_state_idx ON notifications (state)`,
 ];
 
+// NOTE ON MIGRATIONS: there are none, and there cannot be. The app's database
+// role has no rights on its own schema — `ALTER TABLE` fails with "permission
+// denied for schema schema_<org>_vibe_<hash>" — so no column can be added after
+// the tables are created by CSV import. Anything that would want a new column
+// has to be derived from the ones that exist instead. Live calls are marked by
+// an `L-` id prefix rather than a `source` column for exactly this reason.
+
 function connect() {
   // SCHEMA arrives in the env map and is the app's own provisioned schema
   // (vibe_<hash>). Without it there is no search_path and DDL fails with

@@ -59,6 +59,117 @@ function rowsOf(payload: any): any[] {
 }
 
 /**
+ * The helpdesk-call-logs connection — the source of record for live calls.
+ *
+ * Read-only, and reached exactly like the CMMS one: the host injects the
+ * service token, so no key is held here or in the repo. Actions available:
+ * list-call-logs, get-call-log, export-call-transcript, get-call-recording,
+ * get-call-stats.
+ */
+const CALL_LOGS = 'helpdesk-call-logs';
+
+async function callLogs(actionSlug: string, input: Record<string, unknown>): Promise<any> {
+  const res = await fetch(
+    `${process.system.CONNECTIONS_URL}/api/v1/connections/${CALL_LOGS}/actions/${actionSlug}/execute`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(`Call logs ${actionSlug} failed: ${res.status} ${res.statusText}`);
+  }
+  const body = await res.json();
+  return body?.output ?? body?.result ?? body;
+}
+
+/**
+ * Turns from a get-call-log payload.
+ *
+ * Verified shape: the call sits under `summary`, and the transcript is
+ * `summary.transcription` — note that `summary` ALSO holds a string field of
+ * the same name (an HTML AI write-up), so the nesting has to be read exactly.
+ * The other spellings are accepted in case the envelope changes.
+ */
+function transcriptionOf(payload: any): any[] {
+  const t =
+    payload?.summary?.transcription ??
+    payload?.transcription ??
+    payload?.data?.summary?.transcription ??
+    payload?.data?.transcription ??
+    [];
+  return Array.isArray(t) ? t : [];
+}
+
+/** The call record itself, from the same payload. */
+function callRecordOf(payload: any): any {
+  return payload?.summary ?? payload?.data?.summary ?? payload?.data ?? payload ?? {};
+}
+
+/**
+ * Map a connection performer onto Hue's vocabulary. The connection says
+ * USER / AGENT / SYSTEM; Hue's transcripts say caller / agent / system, so a
+ * live turn reads identically to a seeded one.
+ */
+function toPerformer(raw: unknown): string {
+  const p = String(raw ?? '').toLowerCase();
+  if (p === 'user' || p === 'caller' || p === 'customer') return 'caller';
+  if (p === 'agent' || p === 'assistant' || p === 'bot') return 'agent';
+  return 'system';
+}
+
+/** Epoch millis -> the "m:ss" offset from call start that transcripts display. */
+function offsetFrom(startMs: number, atMs: unknown): string {
+  const t = Number(atMs);
+  if (!Number.isFinite(t) || !Number.isFinite(startMs) || t < startMs) return '';
+  const sec = Math.round((t - startMs) / 1000);
+  return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+}
+
+/**
+ * Pull a service request number out of what was actually said.
+ *
+ * Live call logs carry no structured SR field, so the only evidence that the
+ * agent raised one is the number it read back — and it is read back in speech
+ * forms: "210-412", "2 1 0 4 1 2", "210412". Digits are collected across
+ * separators and accepted at 5-8 long, which covers this CMMS's ids without
+ * swallowing phone numbers or times.
+ *
+ * Returning null is a real result, not a failure: a call where the agent
+ * promised a ticket and named no number is exactly the case Hue exists to
+ * catch.
+ */
+function spokenSrNumber(turns: Array<{ performer: string; message: string }>): string | null {
+  // The agent's own words are the claim. A number the caller recites is a
+  // reference to an existing request, not evidence the agent created one, so
+  // agent turns are searched first and only fall back to the caller's.
+  const ordered = [
+    ...turns.filter((t) => t.performer === 'agent'),
+    ...turns.filter((t) => t.performer !== 'agent'),
+  ];
+  for (const turn of ordered) {
+    const text = String(turn.message ?? '');
+    // Collapse spaced/hyphenated digit runs: "2 1 0 4 1 2" and "210-412" both
+    // become "210412", while ordinary prose is left alone.
+    const collapsed = text.replace(/\d(?:[\s-]+\d){2,}/g, (run) => run.replace(/[\s-]+/g, ''));
+    const matches = collapsed.match(/\b\d{5,8}\b/g);
+    if (matches && matches.length) return matches[0];
+  }
+  return null;
+}
+
+/** The connection's satisfactionLevel, mapped onto Hue's sentiment enum. */
+function toSentiment(level: unknown): string {
+  const s = String(level ?? '').toUpperCase();
+  if (s.includes('VERY_DISSATISFIED') || s.includes('ANGRY')) return 'distressed';
+  if (s.includes('DISSATISFIED') || s.includes('FRUSTRAT')) return 'frustrated';
+  if (s.includes('SATISFIED') || s.includes('HAPPY')) return 'happy';
+  if (s) return 'neutral';
+  return '';
+}
+
+/**
  * Call an AI Studio action through the same connections service.
  *
  * The probe showed process.system provides AGENTS_TOKEN but NOT AGENTS_URL, so
@@ -372,6 +483,12 @@ server.addHandler({
       [convoId],
     ).rows;
 
+    // Calls pulled from the helpdesk-call-logs connection. Their channel
+    // records speech only — no tool calls, no caller name, no site — so checks
+    // that read those absences as agent failures have to be told the
+    // difference between "did not happen" and "is not recorded here".
+    const isLiveCall = String(convo.id ?? '').startsWith('L-');
+
     // ---- 1. Resolve the join against the LIVE CMMS -----------------------
     // Strongest signal first: the SR number the agent read back. Falling back
     // to site + time window, which is weaker and recorded as such.
@@ -436,12 +553,24 @@ server.addHandler({
     }
 
     const srId = matched ? String(matched.id) : '';
-    // No joined_at column: the table's shape comes from the seed CSV and DDL is
-    // not permitted, so the join timestamp lives on the eval run instead.
     db.query(
       `update conversations set cmms_sr_id=$2, join_method=$3, join_confidence=$4 where id=$1`,
       [convoId, srId, joinMethod, joinConfidence],
     );
+
+    // A live call has no site of its own — call logs carry none — so the site
+    // of the record it resolved to is the only one available. This writes into
+    // site_hint ONLY when it is empty, which is exactly the live case: a seeded
+    // call's hint is the site as the agent understood it, and that is evidence
+    // in its own right, so it is never overwritten by ground truth.
+    let siteNow = String(convo.site_hint ?? '').trim();
+    if (matched && !siteNow) {
+      const siteName = String(matched.site?.name ?? '').trim();
+      if (siteName) {
+        db.query('update conversations set site_hint=$2 where id=$1', [convoId, siteName]);
+        siteNow = siteName;
+      }
+    }
 
     // ---- 2. Deterministic checks against the live record -----------------
     // Exact, reproducible, free. No model is consulted here by design.
@@ -476,8 +605,18 @@ server.addHandler({
       });
     }
 
+    // Whether this call's channel records tool calls at all. Calls pulled from
+    // the helpdesk-call-logs connection are speech-only — the channel logs no
+    // tool events — so a check that reads "no successful tool call" as a
+    // failure would fire on every live call and be wrong every time. Absence of
+    // a log is not evidence of absence of the action.
+    const hasToolLog = turns.some((t: any) => t.tool_name);
+
     // CR-LOG-02 — never confirm without an id returned by the CMMS.
+    // Only answerable where a tool log exists; otherwise the CMMS join is the
+    // only evidence, and CR-LOG-01 above already covers a missing record.
     const confirmedWithoutId =
+      hasToolLog &&
       srClaimed &&
       !turns.some((t: any) => t.tool_name && t.tool_status === 'success' && t.tool_record_id);
     if (confirmedWithoutId) {
@@ -524,11 +663,29 @@ server.addHandler({
     }
 
     // CR-CALL-01 — name, site and contact must be captured.
+    //
+    // The caller's name is checked only where the channel records one. The
+    // helpdesk call-log channel leaves `name` null on nearly every call, so
+    // reading that null as "the agent never asked" would flag every live call
+    // on the strength of a field the channel simply does not populate. Whether
+    // the agent actually asked is visible in the transcript, which is a reading
+    // task — CR-CALL-01's semantic pass covers it for live calls.
     const missing: string[] = [];
-    if (!String(convo.caller_name ?? '').trim()) missing.push('name');
+    const channelRecordsName = !isLiveCall;
+    if (channelRecordsName && !String(convo.caller_name ?? '').trim()) missing.push('name');
     if (!String(convo.caller_phone ?? '').trim()) missing.push('contact number');
-    if (!String(convo.site_hint ?? '').trim()) missing.push('site');
-    if (missing.length) {
+    // siteNow, not convo.site_hint — the join above may have just resolved it.
+    if (!siteNow) missing.push('site');
+
+    // A call the caller never spoke on cannot be graded on what the agent got
+    // from them. These exist in the live data — the greeting plays and the line
+    // drops — and flagging the agent for not confirming details with someone
+    // who never said a word is noise, not a finding.
+    const callerSpoke = turns.some(
+      (t: any) => t.performer === 'caller' && String(t.message ?? '').trim(),
+    );
+
+    if (missing.length && callerSpoke) {
       findings.push({
         criterionId: 'CR-CALL-01',
         clauseRef: 'S-6.1',
@@ -574,9 +731,45 @@ server.addHandler({
       written++;
     }
 
+    // Retract deterministic findings that this run no longer makes.
+    //
+    // Without this, a criterion that stops failing — because the check was
+    // corrected, or because the record it looked for now exists — leaves its
+    // deviation open for ever, and the conversation ends up marked `passed`
+    // while still carrying open findings that the compliance score counts.
+    //
+    // Scope is deliberately narrow: only this run's own layer
+    // (detected_by = 'deterministic'), only findings still open, and never one
+    // a correction has been proposed against, since deleting that would cascade
+    // the correction away with it.
+    const stillFailing = new Set(findings.map((f) => f.criterionId));
+    const priorDet = db.query(
+      `select id, criterion_id from deviations
+        where conversation_id = $1 and detected_by = 'deterministic' and status = 'open'`,
+      [convoId],
+    ).rows;
+    let retracted = 0;
+    for (const p of priorDet) {
+      if (stillFailing.has(p.criterion_id)) continue;
+      const hasCorrection = db.query(
+        'select id from corrections where deviation_id = $1 limit 1',
+        [p.id],
+      ).rows[0];
+      if (hasCorrection) continue;
+      db.query('delete from deviations where id = $1', [p.id]);
+      retracted++;
+    }
+
+    // eval_status reflects everything open on the call, not just this layer —
+    // a semantic finding from evaluateSemantic must keep the call flagged.
+    const openNow = Number(
+      db.query("select count(*) as n from deviations where conversation_id = $1 and status = 'open'", [
+        convoId,
+      ]).rows[0]?.n ?? 0,
+    );
     db.query('update conversations set eval_status=$2 where id=$1', [
       convoId,
-      findings.length ? 'flagged' : 'passed',
+      openNow ? 'flagged' : 'passed',
     ]);
 
     return {
@@ -584,6 +777,7 @@ server.addHandler({
       join: { cmmsSrId: srId || null, method: joinMethod, confidence: joinConfidence },
       checksRun: 3,
       deviationsFound: written,
+      retracted,
       findings: findings.map((f) => ({
         criterionId: f.criterionId,
         severity: f.severity,
@@ -702,7 +896,8 @@ server.addHandler({
   execute: async (args) => {
     const db = connect();
     const status = String(args.status ?? '').trim();
-    const sql = `select d.*, c.caller_name, c.site_hint, c.started_at, c.cmms_sr_id
+    const sql = `select d.*, c.caller_name, c.caller_phone, c.site_hint,
+                        c.started_at, c.cmms_sr_id
                    from deviations d
                    join conversations c on c.id = d.conversation_id
                   where d.id <> '__seed__' ${status ? 'and d.status = $1' : ''}
@@ -728,10 +923,48 @@ server.addHandler({
     const convo = db.query('select * from conversations where id = $1 limit 1', [id]).rows[0];
     if (!convo) throw new Error(`No conversation ${id}`);
 
-    const turns = db.query(
+    let turns = db.query(
       'select * from transcript_turns where conversation_id = $1 order by turn_index',
       [id],
     ).rows;
+
+    // The connection is the source of record for a live call, so its transcript
+    // is re-read here rather than served from the copy ingest stored. The
+    // stored turns remain the fallback: if the connection is unreachable or has
+    // nothing for this call, the screen still renders what we already hold
+    // rather than an empty transcript.
+    const isLive = String(convo.id ?? '').startsWith('L-');
+    let transcriptSource = isLive ? 'stored_fallback' : 'stored';
+    if (isLive && convo.call_id) {
+      try {
+        const payload = await callLogs('get-call-log', { callLogId: Number(convo.call_id) });
+        const live = transcriptionOf(payload);
+        if (live.length) {
+          const startMs = Number(callRecordOf(payload)?.startTime ?? 0);
+          turns = live.map((t: any, i: number) => ({
+            id: `${id}-L${i}`,
+            conversation_id: id,
+            turn_index: i,
+            performer: toPerformer(t?.performer),
+            message: String(t?.message ?? ''),
+            at_offset: offsetFrom(startMs, t?.timestamp),
+            // Live call logs carry speech only — there is no tool-call log on
+            // this channel, so these stay null rather than being invented.
+            tool_name: null,
+            tool_status: null,
+            tool_args: null,
+            tool_result: null,
+            tool_record_id: null,
+            tool_error: null,
+          }));
+          transcriptSource = 'live';
+        }
+      } catch {
+        // Fall through to the stored copy — a read-time outage on the
+        // connection must not blank a call that was already ingested.
+      }
+    }
+
     const deviations = db.query('select * from deviations where conversation_id = $1', [id]).rows;
 
     // Ground truth, fetched live at read time.
@@ -755,6 +988,7 @@ server.addHandler({
     return {
       conversation: convo,
       turns,
+      transcriptSource,
       deviations: deviations.map((d: any) => ({ ...d, evidence: JSON.parse(d.evidence || '[]') })),
       cmmsRecord,
     };
@@ -763,6 +997,23 @@ server.addHandler({
 
 /** The semantic criteria, and the judge that grades each. */
 const SEMANTIC_CRITERIA: Record<string, { clauseRef: string; requires: string }> = {
+  // The semantic half of CR-LOG-01. The deterministic check catches the agent
+  // CLAIMING a request that does not exist. It cannot catch the other way this
+  // clause is broken: the agent openly failing — "I'm having trouble logging
+  // this, someone will call you back" — after which the caller's fault is just
+  // as unlogged, and nothing was falsely claimed for a check to contradict.
+  // Whether the caller actually reported a new issue needing a record, as
+  // opposed to chasing an existing one, can only be settled by reading the
+  // call, so it is asked here rather than guessed at deterministically.
+  'CR-LOG-01': {
+    clauseRef: 'S-2.1',
+    requires:
+      'A service request must exist in the CMMS for every NEW issue the caller reported on this call. ' +
+      'If the caller reported a new fault and no service request exists, this fails — including where the ' +
+      'agent said it could not log the request, or promised a callback instead. ' +
+      'It does NOT fail where the caller only chased, updated or asked about an EXISTING request, ' +
+      'where the caller reported no fault at all, or where a record does exist.',
+  },
   'CR-LOG-04': {
     clauseRef: 'S-2.2',
     requires:
@@ -788,7 +1039,10 @@ server.addHandler({
     'Grade ONE semantic criterion for one conversation with the Claude judge, against the live CMMS record. One judge call per invocation, because fetches are serialized and each model call is slow.',
   parameters: {
     conversationId: { description: 'Conversation id', type: 'string' },
-    criterionId: { description: 'One of CR-LOG-04, CR-SCHED-01, CR-CAT-01', type: 'string' },
+    criterionId: {
+      description: 'One of CR-LOG-01, CR-LOG-04, CR-SCHED-01, CR-CAT-01',
+      type: 'string',
+    },
   },
   execute: async (args) => {
     const convoId = String(args.conversationId ?? '').trim();
@@ -799,6 +1053,29 @@ server.addHandler({
     const db = connect();
     const convo = db.query('select * from conversations where id = $1 limit 1', [convoId]).rows[0];
     if (!convo) throw new Error(`No conversation ${convoId}`);
+
+    // Where the deterministic layer has already found this criterion failing,
+    // there is nothing for a judge to add — and both layers key their deviation
+    // on (conversation, criterion), so running anyway would overwrite exact
+    // evidence with a model's reading of it. This is what keeps CR-LOG-01's two
+    // halves from colliding: the semantic pass only speaks where the
+    // deterministic one stayed silent.
+    const alreadyDeterministic = db.query(
+      `select id from deviations
+        where conversation_id = $1 and criterion_id = $2 and detected_by = 'deterministic'
+        limit 1`,
+      [convoId, criterionId],
+    ).rows[0];
+    if (alreadyDeterministic) {
+      return {
+        conversationId: convoId,
+        criterionId,
+        verdict: 'already_caught',
+        recorded: false,
+        note: 'The deterministic check already found this criterion failing on this call.',
+      };
+    }
+
     const turns = db.query(
       'select * from transcript_turns where conversation_id = $1 order by turn_index',
       [convoId],

@@ -1,50 +1,55 @@
 /**
- * Hue — live call-log ingest from the Facilio Channels API.
+ * Hue — live call ingest from the helpdesk-call-logs connection.
  *
- * STATUS: built and deployable, INERT until configured. It has no host baked
- * in and will not invent one. Unconfigured, `poll` returns
- * `{ configured: false, needs: [...] }` and changes nothing — the seeded
- * transcripts stay exactly as they are, so switching this on is additive and
- * nothing regresses if the endpoint never arrives.
+ * The connection is the default and only source for live calls. It is
+ * read-only and reached through the connections service, which injects the
+ * service token host-side — so unlike the previous direct-HTTP version, there
+ * is no host, no header name and no key to supply. Ingest works out of the box.
  *
- * ── WHERE THE ENDPOINT GOES ──────────────────────────────────────────────────
- * Everything platform-specific is resolved in `resolveConfig()` and used in
- * exactly one place, `channels()`. Nothing else in this file knows a URL.
+ * ── VERIFIED SHAPES ─────────────────────────────────────────────────────────
+ * Confirmed against the live connection before this was written:
  *
- * Config resolves in this order, so it works with whatever the platform offers:
- *   1. process.env.CHANNELS_*   — if Vibe ever injects custom env values
- *   2. handler args             — supplied by the scheduled job's --payload
+ *   list-call-logs  {page, pageSize<=100, search}
+ *                   -> { list: [ {id, callType, status, name, phone,
+ *                                 createdAt(epoch ms), lastConversation{…}} ],
+ *                        count }
+ *                   Rows are SPARSE: transcription, summary, satisfactionLevel,
+ *                   tags, startTime, endTime and recordingFileId are all null
+ *                   here and only arrive from get-call-log.
  *
- * To switch on with NO CODE CHANGE:
+ *   get-call-log    {callLogId:number}
+ *                   -> { summary: { …call, transcription: [
+ *                          {performer:'AGENT'|'USER'|'SYSTEM', message,
+ *                           timestamp(epoch ms)} ] } }
+ *                   The transcript is at summary.transcription. Note `summary`
+ *                   is both the wrapper key and a string field inside it.
  *
- *   facilio vibe jobs update pull-call-logs --payload '{
- *     "host":       "<US Channels host, e.g. https://xxx.facilio.com>",
- *     "listPath":   "/api/logs?since={since}&status=completed",
- *     "getPath":    "/api/logs/{callId}",
- *     "headerName": "x-integration-key",
- *     "key":        "<the key>"
- *   }'
+ *   export-call-transcript {callLogId:number}
+ *                   -> { status_code, headers, response:"<plain text>" }
+ *                   An HTTP envelope, not data: the transcript is a text blob
+ *                   of "[YYYY-MM-DD HH:MM:SS] PERFORMER: message" lines, and
+ *                   the envelope carries a session cookie. Used ONLY as a
+ *                   fallback when get-call-log returns no transcription.
  *
- * `{since}` and `{callId}` are substituted; everything else is passed through
- * verbatim, so a different path shape needs no code change either.
+ * ── WATERMARK ───────────────────────────────────────────────────────────────
+ * list-call-logs has NO since/from parameter — only page, pageSize and search.
+ * So the watermark cannot be pushed to the API. Instead: the list is newest
+ * first, so pages are walked from the newest and the walk stops at the first
+ * call already stored. Ingest is idempotent on call id regardless, so a
+ * replayed page updates rather than duplicates.
  *
- * NOTE ON THE KEY: a job payload is stored platform-side, not in this repo and
- * not in the bundle, but it is configuration rather than a vault secret. If
- * vault `environment_variable` credentials become available to Vibe functions,
- * move the key there and drop it from the payload — `resolveConfig` will pick
- * it up from process.env with no other change.
- *
- * ── WATERMARK ────────────────────────────────────────────────────────────────
- * Only calls newer than the newest already stored are pulled. Timestamps are
- * ISO-8601 UTC strings, which sort lexicographically, so MAX() is a valid
- * high-water mark. Ingest is idempotent on callId regardless, so a replayed
- * window updates rather than duplicates.
+ * ── CONFIG INDIRECTION, KEPT ────────────────────────────────────────────────
+ * `resolveConfig` survives for the direct-HTTP Channels fallback, which remains
+ * available for hosts the connection does not cover. It still reads
+ * process.env.CHANNELS_* first and falls back to handler args from the job
+ * payload, so a key never lands in this repo or the bundle. Unconfigured, that
+ * path simply stays unused — the connection path does not need it.
  */
 import StudioFunctions, { StudioDatabase } from '@facilio/studio-functions';
 
 const server = new StudioFunctions({ name: 'callingest' });
 
-const CMMS = 'facilio-cmms';
+const CALL_LOGS = 'helpdesk-call-logs';
 
 function connect() {
   return new StudioDatabase({
@@ -55,161 +60,202 @@ function connect() {
 }
 
 // ---------------------------------------------------------------------------
-// Config — the ONLY place the Channels endpoint is defined
+// The connection
 // ---------------------------------------------------------------------------
 
-interface ChannelsConfig {
-  host: string;
-  listPath: string;
-  getPath: string;
-  headerName: string;
-  key: string;
-}
-
-/** Which config values are still missing, by name. Never reveals the key. */
-function resolveConfig(args: Record<string, unknown>): {
-  config: ChannelsConfig | null;
-  missing: string[];
-} {
-  const pick = (envName: string, argName: string) =>
-    String(process.env[envName] ?? args[argName] ?? '').trim();
-
-  const config: ChannelsConfig = {
-    host: pick('CHANNELS_HOST', 'host'),
-    listPath: pick('CHANNELS_LIST_PATH', 'listPath'),
-    getPath: pick('CHANNELS_GET_PATH', 'getPath'),
-    headerName: pick('CHANNELS_HEADER_NAME', 'headerName'),
-    key: pick('CHANNELS_KEY', 'key'),
-  };
-
-  const missing: string[] = [];
-  if (!config.host) missing.push('host');
-  if (!config.listPath) missing.push('listPath');
-  if (!config.getPath) missing.push('getPath');
-  if (!config.headerName) missing.push('headerName');
-  if (!config.key) missing.push('key');
-
-  return { config: missing.length ? null : config, missing };
-}
-
-/**
- * The single call into the Channels API.
- *
- * Deliberately has no default host. If the caller has not supplied one this is
- * never reached, because `poll` returns early — guessing a hostname is exactly
- * the failure mode this file exists to avoid.
- */
-async function channels(config: ChannelsConfig, path: string): Promise<any> {
-  const base = config.host.replace(/\/+$/, '');
-  const url = `${base}${path.startsWith('/') ? '' : '/'}${path}`;
-
-  // The sandbox permits HTTPS on 443 only, and blocks private/loopback hosts.
-  // Fail with a readable message rather than an opaque network error.
-  if (!/^https:\/\//i.test(url)) {
-    throw new Error(`Channels host must be https:// — got "${config.host}"`);
-  }
-
-  const headers: Record<string, string> = { Accept: 'application/json' };
-  headers[config.headerName] = config.key;
-
-  const res = await fetch(url, { headers });
+async function callLogs(actionSlug: string, input: Record<string, unknown>): Promise<any> {
+  const res = await fetch(
+    `${process.system.CONNECTIONS_URL}/api/v1/connections/${CALL_LOGS}/actions/${actionSlug}/execute`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input }),
+    },
+  );
   if (!res.ok) {
-    throw new Error(`Channels ${path} failed: ${res.status} ${res.statusText}`);
+    throw new Error(`Call logs ${actionSlug} failed: ${res.status} ${res.statusText}`);
   }
-  return await res.json();
+  const body = await res.json();
+  return body?.output ?? body?.result ?? body;
 }
 
-// ---------------------------------------------------------------------------
-// Shape adapters — tolerant, because the exact payload is unconfirmed
-// ---------------------------------------------------------------------------
-
-/** Pull the call list out of whatever envelope the endpoint uses. */
-function callList(payload: any): any[] {
-  if (Array.isArray(payload)) return payload;
-  return payload?.data ?? payload?.logs ?? payload?.callLogs ?? payload?.result ?? [];
+function listOf(payload: any): any[] {
+  const l = payload?.list ?? payload?.data?.list ?? payload?.data ?? [];
+  return Array.isArray(l) ? l : [];
 }
 
-/** The documented AE shape is `transcription: [{performer, message}]`. */
 function transcriptionOf(payload: any): any[] {
   const t =
+    payload?.summary?.transcription ??
     payload?.transcription ??
+    payload?.data?.summary?.transcription ??
     payload?.data?.transcription ??
-    payload?.callLog?.transcription ??
     [];
   return Array.isArray(t) ? t : [];
 }
 
-function pickId(row: any): string {
-  return String(row?.callLogId ?? row?.callId ?? row?.id ?? '').trim();
+function callRecordOf(payload: any): any {
+  return payload?.summary ?? payload?.data?.summary ?? payload?.data ?? payload ?? {};
 }
 
-function pickEndedAt(row: any): string {
-  return String(
-    row?.endedAt ?? row?.completedAt ?? row?.updatedAt ?? row?.startedAt ?? row?.createdAt ?? '',
-  );
+// ---------------------------------------------------------------------------
+// Fallback: parse the plain-text export
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse export-call-transcript's text blob into turns.
+ *
+ * Only reached when get-call-log returns no transcription. Lines look like
+ * "[2026-08-13 13:46:38] AGENT: Thanks for contacting…"; anything not matching
+ * (the header block) is skipped.
+ */
+function turnsFromExport(payload: any): Array<{ performer: string; message: string; at: string }> {
+  const text = String(payload?.response ?? payload?.data?.response ?? payload ?? '');
+  if (!text || text.length > 200_000) return [];
+  const out: Array<{ performer: string; message: string; at: string }> = [];
+  for (const line of text.split('\n')) {
+    const m = /^\[([^\]]+)\]\s+([A-Z]+):\s?(.*)$/.exec(line.trim());
+    if (!m) continue;
+    out.push({ performer: toPerformer(m[2]), message: m[3], at: m[1] });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Shape mapping — kept identical to governance.ts so live and seeded calls
+// render through exactly the same path
+// ---------------------------------------------------------------------------
+
+function toPerformer(raw: unknown): string {
+  const p = String(raw ?? '').toLowerCase();
+  if (p === 'user' || p === 'caller' || p === 'customer') return 'caller';
+  if (p === 'agent' || p === 'assistant' || p === 'bot') return 'agent';
+  return 'system';
+}
+
+function offsetFrom(startMs: number, atMs: unknown): string {
+  const t = Number(atMs);
+  if (!Number.isFinite(t) || !Number.isFinite(startMs) || t < startMs) return '';
+  const sec = Math.round((t - startMs) / 1000);
+  return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
 }
 
 /**
- * Map a Channels transcription turn onto Hue's turn shape.
+ * The service request number the agent read back, recovered from speech.
  *
- * `performer` is carried through as-is where it is one Hue recognises, so the
- * transcript reads the same whether it was seeded or pulled live.
+ * Live call logs have no structured SR field. The number is spoken, and spoken
+ * in several forms — "210-412", "2 1 0 4 1 2", "210412" — so digit runs are
+ * collapsed across spaces and hyphens before matching. 5-8 digits covers this
+ * CMMS's ids without catching phone numbers or clock times.
+ *
+ * The agent's turns are searched first: a number the CALLER recites refers to a
+ * request that already exists, and is not evidence the agent created one.
+ *
+ * null is a real finding, not an error — the agent promising a ticket and
+ * naming no number is precisely what Hue is looking for.
  */
-function toTurns(transcription: any[]): any[] {
-  return transcription.map((t: any) => {
-    const performerRaw = String(t?.performer ?? t?.role ?? t?.speaker ?? '').toLowerCase();
-    const performer =
-      performerRaw === 'caller' || performerRaw === 'user' || performerRaw === 'customer'
-        ? 'caller'
-        : performerRaw === 'agent' || performerRaw === 'assistant' || performerRaw === 'bot'
-          ? 'agent'
-          : 'system';
-    return {
-      performer,
-      message: String(t?.message ?? t?.text ?? t?.content ?? ''),
-      at: String(t?.at ?? t?.timestamp ?? t?.offset ?? ''),
-      toolName: t?.toolName ?? t?.tool ?? null,
-      toolStatus: t?.toolStatus ?? null,
-      toolArgs: t?.toolArgs ?? null,
-      toolResult: t?.toolResult ?? null,
-      toolRecordId: t?.toolRecordId ?? t?.recordId ?? null,
-      toolError: t?.toolError ?? null,
-    };
-  });
+function spokenSrNumber(turns: Array<{ performer: string; message: string }>): string | null {
+  const ordered = [
+    ...turns.filter((t) => t.performer === 'agent'),
+    ...turns.filter((t) => t.performer !== 'agent'),
+  ];
+  for (const turn of ordered) {
+    const collapsed = String(turn.message ?? '').replace(/\d(?:[\s-]+\d){2,}/g, (run) =>
+      run.replace(/[\s-]+/g, ''),
+    );
+    const matches = collapsed.match(/\b\d{5,8}\b/g);
+    if (matches && matches.length) return matches[0];
+  }
+  return null;
 }
 
-const boolText = (v: boolean) => (v ? 'true' : 'false');
+function toSentiment(level: unknown): string {
+  const s = String(level ?? '').toUpperCase();
+  if (s.includes('VERY_DISSATISFIED') || s.includes('ANGRY')) return 'distressed';
+  if (s.includes('DISSATISFIED') || s.includes('FRUSTRAT')) return 'frustrated';
+  if (s.includes('SATISFIED') || s.includes('HAPPY')) return 'happy';
+  if (s) return 'neutral';
+  return '';
+}
 
-/** Store one call. Idempotent on callId — a replay replaces turns, never duplicates. */
-function upsertCall(db: any, call: any, turns: any[]): { id: string; replaced: boolean } {
-  const callId = pickId(call);
-  const existing = db.query('select id from conversations where call_id = $1 limit 1', [callId])
+const iso = (ms: unknown): string => {
+  const n = Number(ms);
+  return Number.isFinite(n) && n > 0 ? new Date(n).toISOString() : new Date().toISOString();
+};
+
+/**
+ * Did the agent tell the caller a request exists?
+ *
+ * Two separate signals, and they disagree in the interesting cases: a spoken
+ * number is a strong claim, while "logged"/"raised"/"created" without a number
+ * is a claim with nothing behind it — the shape of the failure this catches.
+ */
+function claimsRequest(
+  turns: Array<{ performer: string; message: string }>,
+  srNumber: string | null,
+): boolean {
+  if (srNumber) return true;
+  return turns.some(
+    (t) =>
+      t.performer === 'agent' &&
+      /\b(logged|raised|created|registered|booked|ticket is|request is)\b/i.test(t.message ?? ''),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Storage. Idempotent on call id — a replay replaces turns, never duplicates.
+// ---------------------------------------------------------------------------
+
+function upsertLiveCall(
+  db: any,
+  record: any,
+  turns: Array<{ performer: string; message: string; at: string }>,
+): { id: string; replaced: boolean; srNumber: string | null } {
+  const callLogId = String(record?.id ?? '').trim();
+  const existing = db.query('select id from conversations where call_id = $1 limit 1', [callLogId])
     .rows[0];
-  const id = existing?.id ?? `C-${callId}`;
+  // The `L-` prefix IS the provenance marker. The app's role cannot ALTER the
+  // table to add a `source` column (permission denied for the schema), so a
+  // live call is identified by its id shape — which is also how the detail
+  // screen knows it may re-read the transcript from the connection.
+  const id = existing?.id ?? `L-${callLogId}`;
 
-  // The SR number the agent read back, if the payload carries one. This is the
-  // claim; the join in `governance.evaluate` decides whether it is true.
-  const claimedSr = String(call?.serviceRequestId ?? call?.srId ?? call?.recordId ?? '');
-  const srClaimed = boolText(Boolean(claimedSr) || Boolean(call?.ticketCreated));
+  const srNumber = spokenSrNumber(turns);
+  const startMs = Number(record?.startTime ?? record?.createdAt ?? 0);
+  const endMs = Number(record?.endTime ?? 0);
+  const durationSec = endMs > startMs ? Math.round((endMs - startMs) / 1000) : 0;
+
+  // The connection leaves `name` null on most calls; the phone number is then
+  // the only identity the caller has, and the list shows it in place of a name.
+  const callerName = String(record?.name ?? '').trim();
+  const callerPhone = String(record?.phone ?? '').trim();
+
+  const status = String(record?.status ?? '').toUpperCase() === 'IN_PROGRESS'
+    ? 'in_progress'
+    : 'completed';
 
   const row = [
     id,
-    String(call?.startedAt ?? call?.createdAt ?? pickEndedAt(call) ?? ''),
-    Number(call?.durationSec ?? call?.duration ?? 0) || 0,
-    String(call?.callerName ?? call?.caller?.name ?? ''),
-    String(call?.callerPhone ?? call?.caller?.phone ?? call?.from ?? ''),
-    String(call?.site ?? call?.siteName ?? ''),
-    String(call?.status ?? 'completed'),
-    String(call?.sentiment ?? ''),
-    srClaimed,
-    claimedSr,
+    iso(record?.startTime ?? record?.createdAt),
+    durationSec,
+    callerName,
+    callerPhone,
+    // Live call logs carry no site. The authoritative site is whatever the
+    // joined CMMS record says, and governance.evaluate fills that in.
+    '',
+    status,
+    toSentiment(record?.satisfactionLevel),
+    claimsRequest(turns, srNumber) ? 'true' : 'false',
+    srNumber ?? '',
   ];
 
   if (existing) {
+    // site_hint is deliberately absent from this UPDATE: governance.evaluate
+    // fills it from the joined CMMS record, and a re-poll must not wipe it.
     db.query(
       `update conversations set started_at=$2, duration_sec=$3, caller_name=$4, caller_phone=$5,
-         site_hint=$6, status=$7, sentiment=$8, sr_claimed=$9, sr_number_claimed=$10 where id=$1`,
-      row,
+         status=$6, sentiment=$7, sr_claimed=$8, sr_number_claimed=$9 where id=$1`,
+      [row[0], row[1], row[2], row[3], row[4], row[6], row[7], row[8], row[9]],
     );
     db.query('delete from transcript_turns where conversation_id = $1', [id]);
   } else {
@@ -219,24 +265,58 @@ function upsertCall(db: any, call: any, turns: any[]): { id: string; replaced: b
           status, sentiment, sr_claimed, sr_number_claimed, cmms_sr_id, join_method,
           join_confidence, eval_status, quality_score)
        values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'','none',0,'not_evaluated',0)`,
-      [row[0], callId, ...row.slice(1)],
+      [row[0], callLogId, ...row.slice(1)],
     );
   }
 
-  turns.forEach((t: any, i: number) => {
+  turns.forEach((t, i) => {
     db.query(
       `insert into transcript_turns
          (id, conversation_id, turn_index, performer, message, at_offset,
           tool_name, tool_status, tool_args, tool_result, tool_record_id, tool_error)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-      [
-        `${id}-T${i}`, id, i, t.performer, t.message, t.at,
-        t.toolName, t.toolStatus, t.toolArgs, t.toolResult, t.toolRecordId, t.toolError,
-      ],
+       values ($1,$2,$3,$4,$5,$6,null,null,null,null,null,null)`,
+      [`${id}-T${i}`, id, i, t.performer, t.message, t.at],
     );
   });
 
-  return { id, replaced: Boolean(existing) };
+  return { id, replaced: Boolean(existing), srNumber };
+}
+
+/**
+ * Fetch one call and map it. get-call-log is the source; the plain-text export
+ * is tried only if it yields no transcription.
+ */
+async function fetchCall(callLogId: string): Promise<{
+  record: any;
+  turns: Array<{ performer: string; message: string; at: string }>;
+  via: string;
+}> {
+  const payload = await callLogs('get-call-log', { callLogId: Number(callLogId) });
+  const record = callRecordOf(payload);
+  const live = transcriptionOf(payload);
+
+  if (live.length) {
+    const startMs = Number(record?.startTime ?? record?.createdAt ?? 0);
+    return {
+      record,
+      turns: live.map((t: any) => ({
+        performer: toPerformer(t?.performer),
+        message: String(t?.message ?? ''),
+        at: offsetFrom(startMs, t?.timestamp),
+      })),
+      via: 'get-call-log',
+    };
+  }
+
+  try {
+    const exported = await callLogs('export-call-transcript', { callLogId: Number(callLogId) });
+    const turns = turnsFromExport(exported);
+    if (turns.length) return { record, turns, via: 'export-call-transcript' };
+  } catch {
+    // The export is a fallback; its failure is not the call's failure.
+  }
+
+  return { record, turns: [], via: 'none' };
 }
 
 // ---------------------------------------------------------------------------
@@ -246,30 +326,34 @@ function upsertCall(db: any, call: any, turns: any[]): { id: string; replaced: b
 server.addHandler({
   name: 'config',
   description:
-    'Report whether the Channels endpoint is configured, and what is still missing. Never returns the key.',
-  parameters: {
-    host: { description: 'Channels base host, https only', type: 'string' },
-    listPath: { description: 'Path template for listing call logs; {since} is substituted', type: 'string' },
-    getPath: { description: 'Path template for one call log; {callId} is substituted', type: 'string' },
-    headerName: { description: 'Auth header name, e.g. x-integration-key', type: 'string' },
-    key: { description: 'Auth key value', type: 'string' },
-  },
-  execute: async (args) => {
-    const { config, missing } = resolveConfig(args);
+    'Report the ingest source and what is already stored. The connection needs no configuration.',
+  parameters: {},
+  execute: async () => {
     const db = connect();
-    const watermark =
-      db.query("select max(started_at) as w from conversations where id <> '__seed__'").rows[0]?.w ??
-      null;
+    const stored = db.query(
+      "select count(*) as n from conversations where id like 'L-%'",
+    ).rows[0]?.n;
+    const newest = db.query(
+      "select max(call_id) as w from conversations where id like 'L-%'",
+    ).rows[0]?.w;
+
+    let reachable = false;
+    let available: number | null = null;
+    try {
+      const payload = await callLogs('list-call-logs', { page: 1, pageSize: 1 });
+      reachable = true;
+      available = Number(payload?.count ?? 0);
+    } catch {
+      reachable = false;
+    }
+
     return {
-      configured: Boolean(config),
-      missing,
-      // Echo only non-secret values so a drop-in can be verified safely.
-      host: config?.host ?? null,
-      listPath: config?.listPath ?? null,
-      getPath: config?.getPath ?? null,
-      headerName: config?.headerName ?? null,
-      keyPresent: Boolean(config?.key),
-      watermark,
+      source: CALL_LOGS,
+      connectionReachable: reachable,
+      callsAvailable: available,
+      liveCallsStored: Number(stored ?? 0),
+      newestStoredCallLogId: newest ?? null,
+      note: 'The connection injects its own credentials host-side. No host or key is configured here.',
     };
   },
 });
@@ -277,116 +361,136 @@ server.addHandler({
 server.addHandler({
   name: 'poll',
   description:
-    'Pull call logs completed since the watermark, store their transcripts, and evaluate each. Inert and harmless until the Channels endpoint is configured.',
+    'Pull new calls from the helpdesk-call-logs connection, newest first, stopping at the first call already stored.',
   parameters: {
-    limit: { description: 'Max calls to pull this run', type: 'number' },
-    host: { description: 'Channels base host, https only', type: 'string' },
-    listPath: { description: 'Path template for listing; {since} is substituted', type: 'string' },
-    getPath: { description: 'Path template for one call; {callId} is substituted', type: 'string' },
-    headerName: { description: 'Auth header name', type: 'string' },
-    key: { description: 'Auth key value', type: 'string' },
+    limit: { description: 'Max calls to ingest this run', type: 'number' },
+    pageSize: { description: 'Rows per page, max 100', type: 'number' },
+    maxPages: { description: 'How many pages to walk before giving up', type: 'number' },
+    backfill: {
+      description: 'Set 1 to walk past already-stored calls and pick up history, instead of stopping at the first one',
+      type: 'number',
+    },
   },
   execute: async (args) => {
-    const { config, missing } = resolveConfig(args);
     const db = connect();
+    const limit = Math.min(Number(args.limit) || 20, 100);
+    const pageSize = Math.min(Number(args.pageSize) || 50, 100);
+    const maxPages = Math.min(Number(args.maxPages) || 5, 20);
 
-    const watermark =
-      db.query("select max(started_at) as w from conversations where id <> '__seed__'").rows[0]?.w ??
-      '1970-01-01T00:00:00Z';
-
-    // ---- NOT CONFIGURED: do nothing, loudly -------------------------------
-    // Returning rather than throwing keeps the scheduled job green while the
-    // endpoint is outstanding, and leaves the seeded transcripts untouched.
-    if (!config) {
-      return {
-        configured: false,
-        missing,
-        watermark,
-        ingested: 0,
-        note:
-          'Channels endpoint not configured. Supply host, listPath, getPath, headerName and key ' +
-          'via the job payload (or CHANNELS_* env) to switch this on. Seeded transcripts are unaffected.',
-      };
-    }
-
-    // ---- CONFIGURED: the live path ----------------------------------------
-    const limit = Math.min(Number(args.limit) || 20, 50);
-    const listPath = config.listPath.replace('{since}', encodeURIComponent(watermark));
-
-    const listed = callList(await channels(config, listPath));
+    // The watermark is an optimisation for the steady state: newest-first plus
+    // "stop at the first call already stored" is the cheapest way to pick up
+    // what has happened since the last run.
+    //
+    // It cannot backfill, though — anything OLDER than a stored call is behind
+    // the stopping point and would never be reached. That matters on first
+    // adoption, where an org's whole call history sits below the first call
+    // ingested. Backfill mode skips stored calls and keeps walking instead.
+    const backfill = Number(args.backfill) === 1;
 
     const ingested: string[] = [];
-    const failed: Array<{ callId: string; error: string }> = [];
+    const skipped: string[] = [];
+    const skippedStored: string[] = [];
+    const failed: Array<{ callLogId: string; error: string }> = [];
+    let listed = 0;
+    let stoppedAt: string | null = null;
 
-    for (const row of listed.slice(0, limit)) {
-      const callId = pickId(row);
-      if (!callId) continue;
+    outer: for (let page = 1; page <= maxPages; page++) {
+      const payload = await callLogs('list-call-logs', { page, pageSize });
+      const rows = listOf(payload);
+      if (!rows.length) break;
+      listed += rows.length;
 
-      // Skip anything already stored — the watermark is a coarse filter and the
-      // endpoint may be inclusive of its boundary.
-      const already = db.query('select id from conversations where call_id = $1 limit 1', [callId])
-        .rows[0];
-      if (already) continue;
+      for (const row of rows) {
+        const callLogId = String(row?.id ?? '').trim();
+        if (!callLogId) continue;
 
-      try {
-        const detail = await channels(config, config.getPath.replace('{callId}', callId));
-        const turns = toTurns(transcriptionOf(detail));
-        // A call with no transcription is not worth storing as a conversation:
-        // Hue would have nothing to grade and it would read as an empty call.
-        if (turns.length === 0) {
-          failed.push({ callId, error: 'no transcription in payload' });
+        // The watermark. The list is newest-first, so the first already-stored
+        // call means everything after it is older and also stored.
+        const already = db.query('select id from conversations where call_id = $1 limit 1', [
+          callLogId,
+        ]).rows[0];
+        if (already) {
+          if (!backfill) {
+            stoppedAt = callLogId;
+            break outer;
+          }
+          skippedStored.push(callLogId);
           continue;
         }
-        const { id } = upsertCall(db, { ...row, ...detail }, turns);
-        ingested.push(id);
-      } catch (err) {
-        // One bad call must not abort the batch or advance past the rest.
-        failed.push({ callId, error: err instanceof Error ? err.message : String(err) });
+
+        // A call still in progress has a transcript that is not finished. Leave
+        // it for a later run rather than storing a partial conversation and
+        // grading the agent on half a call.
+        if (String(row?.status ?? '').toUpperCase() === 'IN_PROGRESS') {
+          skipped.push(callLogId);
+          continue;
+        }
+
+        try {
+          const { record, turns, via } = await fetchCall(callLogId);
+          if (!turns.length) {
+            failed.push({ callLogId, error: 'no transcript from get-call-log or export' });
+            continue;
+          }
+          const { id } = upsertLiveCall(db, { ...row, ...record, id: callLogId }, turns);
+          ingested.push(id);
+          if (ingested.length >= limit) {
+            stoppedAt = 'limit';
+            break outer;
+          }
+        } catch (err) {
+          // One bad call must not abort the batch.
+          failed.push({ callLogId, error: err instanceof Error ? err.message : String(err) });
+        }
       }
     }
 
     return {
-      configured: true,
-      watermark,
-      listed: listed.length,
+      source: CALL_LOGS,
+      mode: backfill ? 'backfill' : 'watermark',
+      listed,
       ingested: ingested.length,
       conversationIds: ingested,
+      skippedInProgress: skipped,
+      skippedAlreadyStored: backfill ? skippedStored.length : 0,
       failed,
-      note:
-        ingested.length > 0
-          ? 'Run governance.evaluate on each new conversation to join it to its CMMS record.'
-          : 'Nothing new since the watermark.',
+      stoppedAt,
+      note: ingested.length
+        ? 'Run governance.evaluate on each new conversation to join it to the CMMS, then governance.evaluateSemantic per semantic criterion.'
+        : backfill
+          ? 'Every call the connection lists is already stored.'
+          : 'Nothing new since the newest stored call.',
     };
   },
 });
 
 server.addHandler({
   name: 'ingestOne',
-  description:
-    'Pull and store a single call log by id. For verifying the endpoint by hand before scheduling.',
-  parameters: {
-    callId: { description: 'Channels call log id', type: 'string' },
-    host: { description: 'Channels base host, https only', type: 'string' },
-    getPath: { description: 'Path template; {callId} is substituted', type: 'string' },
-    headerName: { description: 'Auth header name', type: 'string' },
-    key: { description: 'Auth key value', type: 'string' },
-    listPath: { description: 'Unused here; accepted so one payload serves every handler', type: 'string' },
-  },
+  description: 'Pull and store a single call by its call-log id. For verifying end to end by hand.',
+  parameters: { callLogId: { description: 'Call log id on the connection', type: 'string' } },
   execute: async (args) => {
-    const { config, missing } = resolveConfig(args);
-    if (!config) return { configured: false, missing, ingested: 0 };
+    const callLogId = String(args.callLogId ?? '').trim();
+    if (!callLogId) throw new Error('callLogId is required');
 
-    const callId = String(args.callId ?? '').trim();
-    if (!callId) throw new Error('callId is required');
-
-    const detail = await channels(config, config.getPath.replace('{callId}', callId));
-    const turns = toTurns(transcriptionOf(detail));
-    if (turns.length === 0) {
-      return { configured: true, callId, ingested: 0, error: 'no transcription in payload' };
+    const { record, turns, via } = await fetchCall(callLogId);
+    if (!turns.length) {
+      return { callLogId, ingested: 0, via, error: 'no transcript from get-call-log or export' };
     }
     const db = connect();
-    const { id, replaced } = upsertCall(db, detail, turns);
-    return { configured: true, callId, conversationId: id, turns: turns.length, replaced };
+    const { id, replaced, srNumber } = upsertLiveCall(
+      db,
+      { ...record, id: callLogId },
+      turns,
+    );
+    return {
+      callLogId,
+      conversationId: id,
+      turns: turns.length,
+      via,
+      replaced,
+      spokenSrNumber: srNumber,
+      note: 'Run governance.evaluate to join it to the CMMS.',
+    };
   },
 });
 

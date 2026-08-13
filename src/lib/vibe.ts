@@ -186,6 +186,16 @@ export type ConversationView = Conversation & {
   snippet: string | null;
   deviationCount: number;
   /**
+   * 'seed' | 'live'. Derived from the id prefix, not a column — the app's DB
+   * role cannot add one. Live calls are re-read from the connection on open.
+   */
+  source: string;
+  /**
+   * What to caption the caller with. Live call logs leave `name` null on most
+   * calls, so the phone number is the only identity the caller has.
+   */
+  callerLabel: string;
+  /**
    * The reference the agent read back to the caller. Distinct from
    * `srRecordId`, which is the record the join actually resolved — when the
    * agent invents a number, this is set and that one is not.
@@ -202,8 +212,8 @@ export function toConversation(
     callId: r.call_id,
     startedAt: r.started_at,
     durationSec: r.duration_sec ?? null,
-    caller: { name: r.caller_name ?? null, phone: r.caller_phone ?? null },
-    site: r.site_hint ?? null,
+    caller: { name: r.caller_name || null, phone: r.caller_phone || null },
+    site: r.site_hint || null,
     status: (r.status as Conversation['status']) ?? 'completed',
     sentiment: (r.sentiment as Conversation['sentiment']) || null,
     // The claim, kept honestly distinct from the resolved join below.
@@ -216,6 +226,10 @@ export function toConversation(
     snippet: r.snippet ?? null,
     deviationCount: Number(r.deviation_count ?? 0),
     srNumberClaimed: r.sr_number_claimed || null,
+    source: String(r.id ?? '').startsWith('L-') ? 'live' : 'seed',
+    // Falls through name -> phone -> nothing, so a live call with no name is
+    // still identified by the number that rang in rather than "Unknown caller".
+    callerLabel: r.caller_name || r.caller_phone || 'Unknown caller',
   };
 }
 

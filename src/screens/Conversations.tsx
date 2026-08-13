@@ -77,7 +77,7 @@ export function Conversations({ onOpen }: { onOpen: (id: string) => void }) {
       if (filter === 'No SR created' && c.srRecordId) return false;
       if (site !== 'All sites' && c.site !== site) return false;
       if (!needle) return true;
-      return [c.caller.name, c.site, c.srRecordId, c.callId, c.snippet]
+      return [c.caller.name, c.caller.phone, c.site, c.srRecordId, c.callId, c.snippet]
         .filter(Boolean)
         .some((v) => String(v).toLowerCase().includes(needle));
     });
@@ -282,7 +282,8 @@ function CallRow({ c, onOpen }: { c: ConversationView; onOpen: () => void }) {
   const [hover, setHover] = useState(false);
   const ev = evalTone(c.evalStatus);
   const sent = sentimentTone(c.sentiment);
-  const name = c.caller.name || 'Unknown caller';
+  // Live call logs usually have no caller name, so this is the phone number.
+  const name = c.callerLabel;
   // The design tints the avatar by whether a record exists — the same red that
   // marks a missing service request everywhere else in the app.
   const avatarBg = c.srRecordId ? avatarColor(name) : 'var(--danger-500)';
@@ -342,7 +343,7 @@ function CallRow({ c, onOpen }: { c: ConversationView; onOpen: () => void }) {
             fontWeight: 600,
           }}
         >
-          {initials(c.caller.name)}
+          {initials(c.caller.name) !== '?' ? initials(c.caller.name) : '☎'}
         </span>
         <div style={{ minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>

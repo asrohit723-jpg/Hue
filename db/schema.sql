@@ -70,6 +70,13 @@ CREATE TABLE IF NOT EXISTS conversations (
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- PROVENANCE WITHOUT A COLUMN: the app's role cannot ALTER this table (see the
+-- note in functions/migrate.ts), so where a call came from is carried by its
+-- id. Seeded demo calls are `C-<n>`; calls pulled from the helpdesk-call-logs
+-- connection are `L-<callLogId>`. That prefix is also how the detail screen
+-- knows a transcript can be re-read live, and `call_id` holds the connection's
+-- own id for those rows.
+
 CREATE INDEX IF NOT EXISTS conversations_started_idx ON conversations (started_at DESC);
 CREATE INDEX IF NOT EXISTS conversations_eval_idx    ON conversations (eval_status);
 CREATE INDEX IF NOT EXISTS conversations_srid_idx    ON conversations (cmms_sr_id);

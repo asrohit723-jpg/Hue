@@ -129,7 +129,8 @@ export function ConversationDetail({
   const { conversation: c, deviations, cmmsRecord } = data;
   const ev = evalTone(c.evalStatus);
   const sent = sentimentTone(c.sentiment);
-  const name = c.caller.name || 'Unknown caller';
+  // Live call logs usually have no caller name, so this is the phone number.
+  const name = c.callerLabel;
   const firstFinding = deviations[0] ?? null;
   const textTurns = c.transcript.filter((t) => !t.toolCall);
   // The tool call that failed, if one did — the missing-record panel quotes it
@@ -174,13 +175,14 @@ export function ConversationDetail({
             fontWeight: 600,
           }}
         >
-          {initials(c.caller.name)}
+          {initials(c.caller.name) !== '?' ? initials(c.caller.name) : '☎'}
         </span>
         <div style={{ minWidth: 0 }}>
           <h1 style={{ fontSize: 22, lineHeight: '28px', fontWeight: 700, margin: 0 }}>{name}</h1>
           <p style={{ margin: '4px 0 0', color: 'var(--ink-600)', fontSize: 13 }}>
-            {c.site ?? 'Unknown site'} · {clock(c.startedAt)} · {duration(c.durationSec)}
-            {c.caller.phone ? ` · ${c.caller.phone}` : ''}
+            {c.site ?? 'Site not resolved'} · {clock(c.startedAt)} · {duration(c.durationSec)}
+            {/* The phone is the heading when there is no name — don't repeat it. */}
+            {c.caller.name && c.caller.phone ? ` · ${c.caller.phone}` : ''}
           </p>
         </div>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
