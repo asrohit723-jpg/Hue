@@ -5,6 +5,7 @@ import { BootSkeleton } from './BootSkeleton';
 import { ErrorState } from './ErrorState';
 import { FirstRun } from './FirstRun';
 import criteriaSeed from '../../evals/criteria.seed.json';
+import { page } from '../lib/layout';
 
 /**
  * Governance overview — ported from the OVERVIEW block of the design
@@ -488,7 +489,7 @@ export function Overview({
   const exportLabel = exported ? 'Downloaded' : 'Export to Excel';
 
   return (
-    <div style={{ padding: '28px 32px 40px', maxWidth: 1360 }}>
+    <div style={page('28px 32px 40px')}>
       {/* header */}
       <div style={{ display: 'flex', alignItems: 'flex-end', gap: 16, marginBottom: 20 }}>
         <div>

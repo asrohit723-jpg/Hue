@@ -1,3 +1,5 @@
+import { page } from '../lib/layout';
+
 /** Loading skeleton — ported from the LOADING block of the design. */
 
 const CARDS = [0, 1, 2, 3];
@@ -7,8 +9,7 @@ export function BootSkeleton({ label = 'Loading calls from the CMMS connector…
   return (
     <div
       style={{
-        padding: '28px 32px 40px',
-        maxWidth: 1360,
+        ...page('28px 32px 40px'),
         fontFamily: 'var(--font-sans)',
         fontSize: 14,
         lineHeight: '20px',

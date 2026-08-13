@@ -3,6 +3,7 @@ import { api, type ConversationView } from '../lib/vibe';
 import { BootSkeleton } from './BootSkeleton';
 import { LoadError } from '../components/Chrome';
 import { avatarColor, clock, duration, evalTone, initials, label, sentimentTone } from '../lib/tone';
+import { page } from '../lib/layout';
 
 /**
  * Call logs — ported from the CONVERSATIONS block of the design
@@ -85,7 +86,7 @@ export function Conversations({ onOpen }: { onOpen: (id: string) => void }) {
 
   if (error) {
     return (
-      <div style={{ padding: '24px 28px', maxWidth: 1240 }}>
+      <div style={page('24px 28px')}>
         <LoadError message={error} onRetry={() => setNonce((n) => n + 1)} />
       </div>
     );
@@ -99,7 +100,7 @@ export function Conversations({ onOpen }: { onOpen: (id: string) => void }) {
   };
 
   return (
-    <div style={{ padding: '24px 28px 40px', maxWidth: 1240 }}>
+    <div style={page('24px 28px 40px')}>
       <div style={{ display: 'flex', alignItems: 'flex-end', gap: 16, flexWrap: 'wrap' }}>
         <div>
           <h1

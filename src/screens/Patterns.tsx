@@ -4,6 +4,7 @@ import { BootSkeleton } from './BootSkeleton';
 import { LoadError } from '../components/Chrome';
 import { label, rootCauseTone } from '../lib/tone';
 import criteriaSeed from '../../evals/criteria.seed.json';
+import { page } from '../lib/layout';
 
 /**
  * Patterns — the PATTERNS block of the design ("Helpdesk Governance.dc.html",
@@ -168,7 +169,7 @@ export function Patterns({
 
   if (error) {
     return (
-      <div style={{ padding: '28px 32px', maxWidth: 1180 }}>
+      <div style={page('28px 32px')}>
         <LoadError message={error} onRetry={() => setNonce((n) => n + 1)} />
       </div>
     );
@@ -176,7 +177,7 @@ export function Patterns({
   if (!items) return <BootSkeleton label="Loading patterns…" />;
 
   return (
-    <div style={{ padding: '28px 32px 40px', maxWidth: 1180 }}>
+    <div style={page('28px 32px 40px')}>
       <h1
         style={{
           fontSize: 26,

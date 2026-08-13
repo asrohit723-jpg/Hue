@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import seed from '../../evals/criteria.seed.json';
 import { api, type DeviationWithEvidence } from '../lib/vibe';
 import { BootSkeleton } from './BootSkeleton';
+import { page } from '../lib/layout';
 
 /**
  * Scope of work & evals — the SCOPE & EVALS block of the design
@@ -176,7 +177,7 @@ export function ScopeEvals() {
   if (deviations === null) return <BootSkeleton label="Loading evals…" />;
 
   return (
-    <div style={{ padding: '28px 32px 40px', maxWidth: 1040 }}>
+    <div style={page('28px 32px 40px')}>
       <div style={{ display: 'flex', alignItems: 'flex-end', gap: 16, flexWrap: 'wrap' }}>
         <div style={{ flex: 1, minWidth: 280 }}>
           <h1

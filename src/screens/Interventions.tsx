@@ -4,6 +4,7 @@ import { BootSkeleton } from './BootSkeleton';
 import { LoadError } from '../components/Chrome';
 import { clock, label, rootCauseTone, severityTone } from '../lib/tone';
 import criteriaSeed from '../../evals/criteria.seed.json';
+import { page } from '../lib/layout';
 
 /**
  * Interventions — the INTERVENTIONS LIST block of the design
@@ -116,7 +117,7 @@ export function Interventions({
 
   if (error) {
     return (
-      <div style={{ padding: '24px 28px' }}>
+      <div style={page('24px 28px')}>
         <LoadError message={error} onRetry={() => setNonce((n) => n + 1)} />
       </div>
     );
@@ -161,7 +162,7 @@ export function Interventions({
   ];
 
   return (
-    <div style={{ padding: '24px 28px 40px' }}>
+    <div style={page('24px 28px 40px')}>
       <div style={{ display: 'flex', alignItems: 'flex-end', gap: 16, flexWrap: 'wrap' }}>
         <div>
           <h1

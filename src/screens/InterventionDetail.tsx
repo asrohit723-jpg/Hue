@@ -4,6 +4,7 @@ import { BootSkeleton } from './BootSkeleton';
 import { LoadError } from '../components/Chrome';
 import { clock, duration, label, rootCauseTone, sentimentTone, severityTone } from '../lib/tone';
 import criteriaSeed from '../../evals/criteria.seed.json';
+import { page } from '../lib/layout';
 import {
   classifyRootCause,
   proposeCorrection,
@@ -236,7 +237,7 @@ export function InterventionDetail({
     }
   }
 
-  if (error) return <div style={{ padding: '24px 28px', maxWidth: 1240 }}><LoadError message={error} onRetry={() => setNonce((n) => n + 1)} /></div>;
+  if (error) return <div style={page('24px 28px')}><LoadError message={error} onRetry={() => setNonce((n) => n + 1)} /></div>;
   if (!dev) return <BootSkeleton label="Loading finding…" />;
 
   const sevT = severityTone(dev.severity);
@@ -252,7 +253,7 @@ export function InterventionDetail({
   const site = convo?.site ?? dev.siteHint ?? null;
 
   return (
-    <div style={{ padding: '22px 32px 48px', maxWidth: 1280 }}>
+    <div style={page('22px 32px 48px')}>
       <div
         style={{
           display: 'flex',

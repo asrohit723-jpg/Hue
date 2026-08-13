@@ -3,6 +3,7 @@ import { api, type DeviationWithEvidence } from '../lib/vibe';
 import { BootSkeleton } from './BootSkeleton';
 import { Empty, LoadError, PageHead, Panel, Pill } from '../components/Chrome';
 import { label, severityTone } from '../lib/tone';
+import { page } from '../lib/layout';
 
 /**
  * Notifications shows what WOULD be sent for each flagged finding.
@@ -30,7 +31,7 @@ export function Notifications({ onOpen }: { onOpen: (deviationId: string) => voi
     return () => { cancelled = true; };
   }, [nonce]);
 
-  if (error) return <div style={{ padding: '24px 28px', maxWidth: 1100 }}><LoadError message={error} onRetry={() => setNonce((n) => n + 1)} /></div>;
+  if (error) return <div style={page('24px 28px')}><LoadError message={error} onRetry={() => setNonce((n) => n + 1)} /></div>;
   if (!items) return <BootSkeleton label="Loading notifications…" />;
 
   // Only critical and high findings would page anyone; the rest sit in the queue.
@@ -38,7 +39,7 @@ export function Notifications({ onOpen }: { onOpen: (deviationId: string) => voi
   const rest = items.filter((d) => d.severity !== 'critical' && d.severity !== 'high');
 
   return (
-    <div style={{ padding: '24px 28px 40px', maxWidth: 1100 }}>
+    <div style={page('24px 28px 40px')}>
       <PageHead
         title="Notifications"
         sub={`${paging.length} of ${items.length} findings meet the bar to notify someone.`}

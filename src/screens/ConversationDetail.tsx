@@ -11,6 +11,7 @@ import { LoadError } from '../components/Chrome';
 import criteriaSeed from '../../evals/criteria.seed.json';
 
 import { avatarColor, clock, duration, evalTone, initials, label, sentimentTone } from '../lib/tone';
+import { page } from '../lib/layout';
 
 /**
  * Call detail — the full CONVERSATION DETAIL block of the design
@@ -201,7 +202,7 @@ export function ConversationDetail({
 
   if (error) {
     return (
-      <div style={{ padding: '24px 28px', maxWidth: 1240 }}>
+      <div style={page('24px 28px')}>
         <LoadError message={error} onRetry={() => setNonce((n) => n + 1)} />
       </div>
     );
@@ -220,7 +221,7 @@ export function ConversationDetail({
   const failedTool = c.transcript.find((t) => t.toolCall && t.toolCall.status !== 'success');
 
   return (
-    <div style={{ padding: '22px 32px 40px' }}>
+    <div style={page('22px 32px 40px')}>
       <div
         style={{
           display: 'flex',
