@@ -28,25 +28,50 @@ evidence: voice transcripts are speech only, so nothing records what the agent's
 tooling actually attempted. It is reachable as `governance.callToolCalls` and
 nothing calls it automatically, because it cannot resolve any of our calls.
 
-Tested, not assumed:
+`facilioThreadId` is almost certainly the RIGHT field — the platform team says
+so, and the id ranges support it: call threads run 33481-34111 and threads this
+app creates itself land at 34478 and 34511, which reads as one shared sequence.
+The problem appears to be visibility, not the identifier.
 
-- The action takes `threadId`, documented as the call log's `facilioThreadId`,
-  and reads `/api/agentChat/getThreadMessages`.
-- **All eleven** live calls are rejected — `Thread Id N not found` for 34111,
-  34099, 34095, 34094, 34089, 33942, 33937, 33927, 33913, 33911 and 33481.
-- The action itself is healthy: an AI Studio agent-chat thread returns `200`
-  with `{"message": []}`.
-- `facilioThreadId` is the only thread id a call log carries, and the voice
-  agent (`facilioAgentId` 6208) is itself `Agent not found` in AI Studio.
+Four mismatches were ruled out one at a time, each with a test:
 
-So the voice channel's threads are not in the agent-chat namespace this endpoint
-reads. **What is needed from the platform team: the thread id that addresses a
-voice call there** — one working id, for any of these calls.
+| Suspected | Test | Result |
+|---|---|---|
+| Reading the sparse LIST row | `get-call-log` for call 2434 | `facilioThreadId: 33942`, identical to the list. This is the populated source — `recordingFileId` is 1967 here and `null` in the list. |
+| Wrong org or connection | Called through the same CLI credential that had just fetched the call log (org 2935) | Same `not found` |
+| Number vs string | Sent `33942` and `"33942"` | Byte-identical error; the value is coerced |
+| Wrong parameter name | Sent `facilioThreadId` instead of `threadId` | `400 — Following fields are missing: {'threadId'}`. The key is `threadId`, which is what was sent |
 
-To verify it the moment that arrives:
+The control that isolates it — same connection, credential, org, key and type,
+one id resolving and the other not:
+
+```
+threadId 34511  (an agent-chat thread this credential created)  -> 200 {"message": []}
+threadId 33942  (call 2434's facilioThreadId)                   -> 500 "Thread Id 33942 not found"
+```
+
+The same credential also cannot see the voice agent itself: `v2-get-agent` for
+`facilioAgentId` 6208 returns `Agent not found`. It creates and reads its own
+threads perfectly, and sees neither the voice agent nor the voice agent's
+threads.
+
+**The question for the platform team: does `/api/agentChat/getThreadMessages`
+filter by owning app or agent?** If it does, the fix is a connection scoped to
+the helpdesk voice app rather than a different id. Exact reproduction:
+
+```
+connection : helpdesk-agent-tools
+action     : get-call-tool-calls
+params     : {"threadId": 33942}
+upstream   : GET /api/agentChat/getThreadMessages
+org        : 2935 (Ocean's 3)
+call       : call log 2434 — facilioThreadId 33942, facilioAgentId 6208, channelId 4893
+```
+
+To verify the moment it is unblocked:
 
 ```sh
-facilio vibe function run governance callToolCalls --args '{"threadId":"<id>"}'
+facilio vibe function run governance callToolCalls --args '{"threadId":"33942"}'
 ```
 
 That returns the raw messages unmapped. The output schema is unpublished and no
