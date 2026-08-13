@@ -2154,6 +2154,49 @@ server.addHandler({
 });
 
 server.addHandler({
+  name: 'getCorrection',
+  description:
+    'The correction attached to one deviation, or null. Read on load so the before/after diff and the applied → verifying → resolved progression survive a refresh.',
+  parameters: { deviationId: { description: 'Deviation id', type: 'string' } },
+  execute: async (args) => {
+    const db = connect();
+    const devId = String(args.deviationId ?? '').trim();
+    const row = db.query(
+      'select * from corrections where deviation_id = $1 order by proposed_at desc limit 1',
+      [devId],
+    ).rows[0];
+    if (!row) return { correction: null };
+
+    let cmmsAction: any = {};
+    try {
+      cmmsAction =
+        typeof row.cmms_action === 'string' ? JSON.parse(row.cmms_action || '{}') : row.cmms_action ?? {};
+    } catch {
+      cmmsAction = {};
+    }
+
+    return {
+      correction: {
+        id: row.id,
+        deviationId: row.deviation_id,
+        target: row.target,
+        title: row.title,
+        rationale: row.rationale,
+        beforeText: row.before_text,
+        afterText: row.after_text,
+        state: row.state,
+        recommendedAction: row.recommended_action,
+        assignee: row.assignee,
+        cmmsAction,
+        proposedAt: row.proposed_at,
+        appliedAt: row.applied_at,
+        appliedRecordId: row.applied_record_id,
+      },
+    };
+  },
+});
+
+server.addHandler({
   name: 'judgeContext',
   description:
     'Everything the browser-side judges need for one deviation: the finding, its evidence, the key turns, and the LIVE CMMS record. No model call — fast and never at risk of a timeout.',

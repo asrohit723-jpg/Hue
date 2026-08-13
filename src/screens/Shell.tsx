@@ -514,6 +514,7 @@ export function Shell({ me }: { me: CurrentUser }) {
               deviationId={deviationId}
               onBack={() => setScreen('ints')}
               onOpenCall={openCall}
+              onViewPattern={() => setScreen('patterns')}
             />
           )}
           {screen === 'patterns' && <Patterns onOpenCriterion={() => setScreen('ints')} />}

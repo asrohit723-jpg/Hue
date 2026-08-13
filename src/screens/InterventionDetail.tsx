@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import type { Conversation } from '@shared/contract';
-import { api, vibe, type DeviationWithEvidence } from '../lib/vibe';
+import { api, vibe, type ConversationView, type DeviationWithEvidence } from '../lib/vibe';
 import { BootSkeleton } from './BootSkeleton';
-import { BackLink, Button, LoadError, Panel, Pill } from '../components/Chrome';
-import { label, rootCauseTone, severityTone } from '../lib/tone';
+import { LoadError } from '../components/Chrome';
+import { clock, duration, label, rootCauseTone, sentimentTone, severityTone } from '../lib/tone';
+import criteriaSeed from '../../evals/criteria.seed.json';
 import {
   classifyRootCause,
   proposeCorrection,
@@ -53,6 +53,39 @@ type ActionState = {
 
 const IDLE: ActionState = { busy: null, error: null, timeout: null, outcome: null };
 
+/** The stored correction, as `getCorrection` returns it. */
+interface CorrectionRecord {
+  id: string;
+  deviationId: string;
+  target: string | null;
+  title: string | null;
+  rationale: string | null;
+  beforeText: string | null;
+  afterText: string | null;
+  state: string;
+  recommendedAction: string | null;
+  assignee: string | null;
+  cmmsAction: { verb?: string; recordId?: string; fields?: Array<{ label: string; value: string }> };
+  proposedAt: string | null;
+  appliedAt: string | null;
+  appliedRecordId: string | null;
+}
+
+/** Criterion id -> its seeded title, clause and layer. */
+const byId = new Map(
+  (
+    criteriaSeed as {
+      criteria: Array<{
+        id: string;
+        title: string;
+        description: string;
+        clauseRef: string;
+        layer: string;
+      }>;
+    }
+  ).criteria.map((c) => [c.id, c]),
+);
+
 /** The function tags an unfinished judge with this prefix. */
 const JUDGE_TIMEOUT = 'JUDGE_TIMEOUT';
 
@@ -60,13 +93,17 @@ export function InterventionDetail({
   deviationId,
   onBack,
   onOpenCall,
+  onViewPattern,
 }: {
   deviationId: string;
   onBack: () => void;
   onOpenCall: (conversationId: string) => void;
+  onViewPattern?: () => void;
 }) {
   const [dev, setDev] = useState<DeviationWithEvidence | null>(null);
-  const [convo, setConvo] = useState<Conversation | null>(null);
+  const [allDeviations, setAllDeviations] = useState<DeviationWithEvidence[]>([]);
+  const [corr, setCorr] = useState<CorrectionRecord | null>(null);
+  const [convo, setConvo] = useState<ConversationView | null>(null);
   const [record, setRecord] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
@@ -83,10 +120,22 @@ export function InterventionDetail({
         if (!found) throw new Error(`Deviation ${deviationId} not found`);
         if (cancelled) return;
         setDev(found);
-        const call = await api.getConversation(found.conversationId);
+        // Kept for the "Seen before" cell — how often this criterion has failed.
+        setAllDeviations(all);
+
+        const [call, correction] = await Promise.all([
+          api.getConversation(found.conversationId),
+          callFn<{ correction: CorrectionRecord | null }>('getCorrection', {
+            deviationId,
+          }).catch(() => ({ correction: null })),
+        ]);
         if (cancelled) return;
         setConvo(call.conversation);
         setRecord(call.cmmsRecord);
+        // Read on load so the diff and the applied -> verifying -> resolved
+        // progression survive a refresh rather than living only in this
+        // session's action state.
+        setCorr(correction.correction);
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
       }
@@ -190,229 +239,1026 @@ export function InterventionDetail({
   if (error) return <div style={{ padding: '24px 28px', maxWidth: 1240 }}><LoadError message={error} onRetry={() => setNonce((n) => n + 1)} /></div>;
   if (!dev) return <BootSkeleton label="Loading finding…" />;
 
-  const sev = severityTone(dev.severity);
-  const rc = rootCauseTone(dev.rootCause || 'unknown');
+  const sevT = severityTone(dev.severity);
+  const rcT = rootCauseTone(dev.rootCause || 'unknown');
   const rec = record as any;
 
-  return (
-    <div style={{ padding: '24px 28px 40px', maxWidth: 1100 }}>
-      <BackLink onClick={onBack}>Interventions</BackLink>
+  const meta = byId.get(dev.criterionId);
+  const criterionTitle = meta?.title ?? dev.criterionId;
+  const clauseText = meta?.description ?? null;
+  const status = correctionStatus(corr?.state);
+  const seenBefore = allDeviations.filter((d) => d.criterionId === dev.criterionId).length;
+  const caller = convo?.callerLabel ?? dev.callerName ?? dev.callerPhone ?? 'Unknown caller';
+  const site = convo?.site ?? dev.siteHint ?? null;
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <Pill bg={sev.bg} fg={sev.fg}>{label(dev.severity)}</Pill>
-        <Pill bg={rc.bg} fg={rc.fg}>{label(dev.rootCause || 'unknown')}</Pill>
-        <span style={{ fontSize: 12, color: 'var(--ink-500)' }}>{dev.criterionId} · clause {dev.clauseRef}</span>
-        <span style={{ fontSize: 12, color: 'var(--ink-500)' }}>detected by {dev.detectedBy}</span>
+  return (
+    <div style={{ padding: '22px 32px 48px', maxWidth: 1280 }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          fontSize: 13,
+          color: 'var(--ink-600)',
+          marginBottom: 14,
+        }}
+      >
+        <span onClick={onBack} style={{ cursor: 'pointer', color: 'var(--blue-500)', fontWeight: 500 }}>
+          Interventions
+        </span>
+        <span>/</span>
+        <span>{dev.id}</span>
       </div>
 
-      <h1 style={{ fontSize: 22, lineHeight: '30px', fontWeight: 700, margin: '12px 0 0', letterSpacing: '-.01em', textWrap: 'pretty' }}>
-        {dev.summary}
-      </h1>
-
-      {convo && (
-        <p style={{ margin: '8px 0 0', color: 'var(--ink-600)' }}>
-          {convo.caller.name} · {convo.site} ·{' '}
-          <button
-            onClick={() => onOpenCall(convo.id)}
-            style={{ background: 'none', border: 'none', padding: 0, color: 'var(--blue-500)', fontWeight: 500, cursor: 'pointer', fontSize: 14 }}
+      {/* header */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: 320 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <h1
+              style={{
+                fontSize: 23,
+                lineHeight: '29px',
+                fontWeight: 700,
+                margin: 0,
+                letterSpacing: '-.01em',
+              }}
+            >
+              {criterionTitle}
+            </h1>
+            <span
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                fontSize: 11,
+                fontWeight: 700,
+                textTransform: 'uppercase',
+                letterSpacing: '.05em',
+                color: sevT.fg,
+              }}
+            >
+              <span style={{ width: 8, height: 8, borderRadius: 999, background: sevT.fg }} />
+              {dev.severity}
+            </span>
+            <span
+              style={{
+                fontSize: 12,
+                fontWeight: 500,
+                padding: '3px 10px',
+                borderRadius: 4,
+                border: '1px solid var(--border-default)',
+                background: '#fff',
+                color: status.fg,
+              }}
+            >
+              {status.label}
+            </span>
+          </div>
+          <p
+            style={{
+              margin: '7px 0 0',
+              color: 'var(--ink-700)',
+              fontSize: 15,
+              lineHeight: '22px',
+              maxWidth: '78ch',
+              textWrap: 'pretty',
+            }}
           >
-            open the call
+            {dev.summary}
+          </p>
+          <div style={{ marginTop: 9, fontSize: 13, color: 'var(--ink-500)' }}>
+            {[
+              convo?.callId ? `Call ${convo.callId}` : dev.conversationId,
+              dev.startedAt ? clock(dev.startedAt) : null,
+              caller,
+              site,
+              convo ? duration(convo.durationSec) : null,
+            ]
+              .filter(Boolean)
+              .join(' · ')}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            onClick={() => onOpenCall(dev.conversationId)}
+            style={{
+              height: 36,
+              padding: '0 14px',
+              borderRadius: 4,
+              border: '1px solid var(--blue-500)',
+              background: 'var(--blue-500)',
+              color: '#fff',
+              fontWeight: 500,
+              fontSize: 13,
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 7,
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M8 5.5v13l11-6.5z" />
+            </svg>
+            Listen to the call
           </button>
-        </p>
-      )}
+        </div>
+      </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.4fr) minmax(0,1fr)', gap: 16, marginTop: 20, alignItems: 'start' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <Panel>
-            <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--border-default)', fontWeight: 600 }}>
-              Evidence
+      {/* call context strip */}
+      <div
+        style={{
+          background: '#fff',
+          border: '1px solid var(--border-default)',
+          borderRadius: 8,
+          marginTop: 16,
+          padding: '6px 18px',
+          display: 'flex',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+        }}
+      >
+        {[
+          { label: 'Call', value: convo?.callId ?? dev.conversationId, color: 'var(--ink-900)' },
+          { label: 'Caller', value: caller, color: 'var(--ink-900)' },
+          { label: 'Site', value: site ?? '—', color: site ? 'var(--ink-900)' : 'var(--ink-400)' },
+          {
+            label: 'Sentiment',
+            value: convo?.sentiment ? label(convo.sentiment) : '—',
+            color: convo?.sentiment ? sentimentTone(convo.sentiment).fg : 'var(--ink-400)',
+          },
+          {
+            label: 'CMMS record',
+            value: dev.checkedSrId ? `SR ${dev.checkedSrId}` : 'None found',
+            color: dev.checkedSrId ? 'var(--ink-900)' : 'var(--danger-500)',
+          },
+          {
+            // Nothing writes a quality score yet — an em dash rather than a 0
+            // that would read as a real, terrible score.
+            label: 'Quality score',
+            value: convo?.qualityScore ? String(convo.qualityScore) : '—',
+            color: convo?.qualityScore ? 'var(--ink-900)' : 'var(--ink-400)',
+          },
+          {
+            label: 'Detected',
+            value: `${dev.detectedBy}${dev.startedAt ? `, ${clock(dev.startedAt)}` : ''}`,
+            color: 'var(--ink-900)',
+          },
+        ].map((c) => (
+          <div
+            key={c.label}
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 2,
+              padding: '8px 22px 8px 0',
+              marginRight: 22,
+              borderRight: '1px solid var(--ink-100)',
+            }}
+          >
+            <span style={microLabel}>{c.label}</span>
+            <span style={{ fontSize: 13, fontWeight: 500, color: c.color }}>{c.value}</span>
+          </div>
+        ))}
+        <span
+          onClick={() => onOpenCall(dev.conversationId)}
+          style={{
+            marginLeft: 'auto',
+            fontSize: 13,
+            fontWeight: 500,
+            color: 'var(--blue-500)',
+            cursor: 'pointer',
+            whiteSpace: 'nowrap',
+            padding: '8px 0',
+          }}
+        >
+          Open full call record →
+        </span>
+      </div>
+
+      <ZoneHeading title="What happened" />
+
+      {/* at a glance */}
+      <div
+        style={{
+          background: '#fff',
+          border: '1px solid var(--border-default)',
+          borderRadius: 8,
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit,minmax(250px,1fr))',
+          overflow: 'hidden',
+        }}
+      >
+        <GlanceCell
+          label="Rule broken"
+          accent="var(--blue-500)"
+          value={`Clause ${dev.clauseRef || '—'}`}
+          fg="var(--blue-600)"
+          detail={criterionTitle}
+        />
+        <GlanceCell
+          label="Why it happened"
+          accent={rcT.fg}
+          value={dev.rootCause && dev.rootCause !== 'unknown' ? label(dev.rootCause) : 'Not classified'}
+          fg="var(--ink-900)"
+          // The classifier is a judge; until it has run on this finding there is
+          // no root cause to state, and guessing one would be fabrication.
+          detail={
+            dev.rootCause && dev.rootCause !== 'unknown'
+              ? `${dev.rootCause} · classified by the root-cause judge`
+              : 'Run "Classify & draft fix" to have the judge determine this.'
+          }
+        />
+        <GlanceCell
+          label="Seen before"
+          accent={seenBefore > 5 ? 'var(--warning-500)' : 'var(--ink-300)'}
+          value={`${seenBefore} ${seenBefore === 1 ? 'time' : 'times'}`}
+          fg="var(--ink-900)"
+          detail={
+            seenBefore > 1
+              ? `${dev.criterionId} has failed on ${seenBefore} calls held here.`
+              : 'The only time this criterion has failed so far.'
+          }
+          onLink={seenBefore > 1 ? onViewPattern : undefined}
+        />
+      </div>
+
+      {/* the rule + the evidence */}
+      <div
+        style={{
+          background: '#fff',
+          border: '1px solid var(--border-default)',
+          borderRadius: 8,
+          overflow: 'hidden',
+          marginTop: 12,
+          display: 'grid',
+          gridTemplateColumns: 'minmax(300px,0.9fr) minmax(0,1.1fr)',
+        }}
+      >
+        <div style={{ padding: '16px 20px', borderRight: '1px solid var(--ink-100)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <h3 style={{ fontSize: 14, fontWeight: 600, margin: 0 }}>The rule this broke</h3>
+            <span
+              style={{
+                fontSize: 11,
+                fontWeight: 600,
+                padding: '2px 8px',
+                borderRadius: 999,
+                background: 'var(--blue-025)',
+                color: 'var(--blue-600)',
+              }}
+            >
+              {dev.clauseRef || '—'}
+            </span>
+          </div>
+          <blockquote
+            style={{
+              margin: '12px 0 0',
+              padding: '12px 16px',
+              borderLeft: '3px solid var(--blue-500)',
+              background: 'var(--blue-025)',
+              borderRadius: '0 6px 6px 0',
+              fontSize: 13,
+              lineHeight: '21px',
+              color: clauseText ? 'var(--ink-900)' : 'var(--ink-500)',
+              textWrap: 'pretty',
+            }}
+          >
+            {clauseText ?? 'No clause text is held for this criterion.'}
+          </blockquote>
+          <div style={{ marginTop: 14 }}>
+            <div style={microLabel}>Criterion failed</div>
+            <div
+              style={{
+                fontSize: 13,
+                lineHeight: '20px',
+                marginTop: 4,
+                color: 'var(--ink-900)',
+                fontWeight: 500,
+              }}
+            >
+              {criterionTitle}
             </div>
-            {dev.evidence.length === 0 ? (
-              <div style={{ padding: '18px', fontSize: 13, color: 'var(--ink-600)' }}>
-                No turn-level evidence was recorded for this finding.
-              </div>
-            ) : (
-              dev.evidence.map((e, i) => (
-                <div
-                  key={i}
-                  style={{
-                    padding: '12px 18px',
-                    borderBottom: '1px solid var(--ink-100)',
-                    background: e.isViolation ? 'var(--danger-050)' : '#fff',
-                  }}
-                >
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', fontSize: 11, color: 'var(--ink-600)' }}>
-                    <span style={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.03em' }}>{e.who}</span>
-                    <span style={{ fontVariantNumeric: 'tabular-nums' }}>{e.at}</span>
-                    {e.isViolation && (
-                      <span style={{ marginLeft: 'auto', color: 'var(--danger-500)', fontWeight: 600 }}>violation</span>
-                    )}
-                  </div>
-                  <p style={{ margin: '5px 0 0', fontSize: 13, lineHeight: '19px', color: e.isViolation ? 'var(--danger-700)' : 'var(--ink-900)', textWrap: 'pretty' }}>
-                    {e.quote}
-                  </p>
-                </div>
-              ))
-            )}
-          </Panel>
-
-          <Panel>
-            <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--border-default)', fontWeight: 600 }}>
-              Correction
+            <div
+              style={{ fontSize: 12, color: 'var(--ink-600)', marginTop: 3, lineHeight: '18px' }}
+            >
+              {dev.criterionId} · {meta?.layer ?? 'unknown'} · detected by {dev.detectedBy}
             </div>
-            <div style={{ padding: 18 }}>
-              <p style={{ margin: '0 0 14px', fontSize: 13, color: 'var(--ink-700)', lineHeight: '20px', textWrap: 'pretty' }}>
-                Classify where the fix belongs, draft it, then approve. Nothing is written to the CMMS
-                until you approve, and the write key is claimed first so approving twice cannot
-                create two records.
-              </p>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <Button primary onClick={analyse} disabled={Boolean(act.busy)}>
-                  {act.busy === 'classify'
-                    ? 'Classifying… (~15s)'
-                    : act.busy === 'propose'
-                      ? 'Drafting fix… (~20s)'
-                      : act.timeout
-                        ? 'Retry analysis'
-                        : 'Classify & draft fix'}
-                </Button>
-                <Button
-                  onClick={() => run('approveCorrection', { correctionId: `CO-${dev.id}` }, 'approve')}
-                  disabled={Boolean(act.busy)}
-                >
-                  {act.busy === 'approve' ? 'Applying…' : 'Approve & apply'}
-                </Button>
-                <Button
-                  onClick={() => run('verifyCorrection', { correctionId: `CO-${dev.id}` }, 'verify')}
-                  disabled={Boolean(act.busy)}
-                >
-                  {act.busy === 'verify' ? 'Verifying…' : 'Verify'}
-                </Button>
-              </div>
-
-              {/* Timeout: nothing was learned. Never rendered as a pass, and
-                  never left blank — the only honest read is "unknown, retry". */}
-              {act.timeout && (
-                <div
-                  style={{
-                    marginTop: 14,
-                    background: 'var(--warning-050)',
-                    border: '1px solid var(--warning-500)',
-                    borderRadius: 6,
-                    padding: '12px 14px',
-                  }}
-                >
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--warning-700)" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-                      <circle cx="12" cy="12" r="9" />
-                      <path d="M12 7v5l3 2" />
-                    </svg>
-                    <span style={{ fontWeight: 600, color: 'var(--warning-700)' }}>
-                      Couldn't complete — the judge timed out
-                    </span>
-                  </div>
-                  <p style={{ margin: '6px 0 0', fontSize: 13, color: 'var(--warning-700)', lineHeight: '19px', textWrap: 'pretty' }}>
-                    The model did not respond within the platform's request limit, after three
-                    attempts. <strong>This is not a verdict</strong> — nothing has been decided about
-                    this finding, and nothing was written. Retry, or leave it and come back.
-                    {act.outcome?.rootCause && (
-                      <> The root cause was classified as <strong>{act.outcome.rootCause}</strong> before the timeout, and that part is saved.</>
-                    )}
-                  </p>
-                  <div style={{ marginTop: 10 }}>
-                    <Button primary onClick={analyse} disabled={Boolean(act.busy)}>
-                      Retry
-                    </Button>
-                  </div>
-                  <details style={{ marginTop: 10 }}>
-                    <summary style={{ fontSize: 12, color: 'var(--warning-700)', cursor: 'pointer' }}>
-                      Technical detail
-                    </summary>
-                    <p style={{ margin: '6px 0 0', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--warning-700)', wordBreak: 'break-word' }}>
-                      {act.timeout}
-                    </p>
-                  </details>
-                </div>
-              )}
-
-              {/* A genuine failure — bad data or an unusable verdict. */}
-              {act.error && (
-                <div style={{ marginTop: 14, background: 'var(--danger-050)', border: '1px solid var(--danger-500)', borderRadius: 6, padding: '12px 14px' }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--danger-700)' }}>That step failed</div>
-                  <p style={{ margin: '6px 0 0', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--danger-700)', wordBreak: 'break-word' }}>
-                    {act.error}
-                  </p>
-                </div>
-              )}
-
-              {/* Success. */}
-              {act.outcome && act.outcome.ok !== false && (
-                <div style={{ marginTop: 14, background: 'var(--success-050)', border: '1px solid var(--success-400)', borderRadius: 6, padding: '12px 14px' }}>
-                  <div style={{ fontWeight: 600, color: 'var(--success-700)' }}>
-                    {act.outcome.stage === 'complete'
-                      ? 'Correction drafted'
-                      : act.outcome.state === 'applied'
-                        ? act.outcome.alreadyApplied
-                          ? 'Already applied — no second write'
-                          : 'Applied to the CMMS'
-                        : act.outcome.verified
-                          ? 'Verified against the live record'
-                          : 'Done'}
-                  </div>
-                  <div style={{ marginTop: 6, fontSize: 13, color: 'var(--ink-900)', display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    {act.outcome.rootCause && <span>Root cause: <strong>{act.outcome.rootCause}</strong></span>}
-                    {act.outcome.target && <span>Fix belongs in: <strong>{act.outcome.target}</strong></span>}
-                    {act.outcome.title && <span>{act.outcome.title}</span>}
-                    {act.outcome.appliedRecordId && <span>Record: SR {act.outcome.appliedRecordId}</span>}
-                  </div>
-                  <details style={{ marginTop: 10 }}>
-                    <summary style={{ fontSize: 12, color: 'var(--ink-600)', cursor: 'pointer' }}>Full response</summary>
-                    <pre style={{ margin: '8px 0 0', background: 'var(--ink-050)', borderRadius: 6, padding: 12, fontFamily: 'var(--font-mono)', fontSize: 11, lineHeight: '17px', overflowX: 'auto', maxHeight: 280 }}>
-                      {JSON.stringify(act.outcome, null, 2)}
-                    </pre>
-                  </details>
-                </div>
-              )}
-            </div>
-          </Panel>
+          </div>
         </div>
 
-        <Panel style={rec ? undefined : { border: '1px solid var(--danger-500)' }}>
-          <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--border-default)', background: rec ? '#fff' : 'var(--danger-050)' }}>
-            <span style={{ fontWeight: 600, color: rec ? 'var(--ink-900)' : 'var(--danger-700)' }}>
-              CMMS record
-            </span>
-            <div style={{ fontSize: 12, color: rec ? 'var(--ink-500)' : 'var(--danger-700)', marginTop: 2 }}>
-              {rec ? 'checked live against this record' : 'no record — this is the finding'}
-            </div>
-          </div>
-          <div style={{ padding: 16, fontSize: 13 }}>
-            {rec ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <Row k="Record" v={`SR ${rec.id}`} />
-                <Row k="Subject" v={String(rec.subject ?? '—')} />
-                <Row k="Site" v={String(rec.site?.name ?? '—')} />
-                <Row k="Urgency" v={String(rec.urgency ?? '—')} />
-                <Row k="Status" v={String(rec.moduleState ?? '—')} />
+        <div style={{ padding: '16px 20px' }}>
+          <h3 style={{ fontSize: 14, fontWeight: 600, margin: '0 0 14px' }}>On the call</h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 13 }}>
+            {dev.evidence.map((e, i) => (
+              <div
+                key={i}
+                style={{
+                  display: 'flex',
+                  gap: 12,
+                  alignItems: 'flex-start',
+                  borderLeft: `2px solid ${e.isViolation ? 'var(--danger-500)' : 'var(--ink-200)'}`,
+                  padding: '1px 0 1px 14px',
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: 11,
+                    color: 'var(--ink-500)',
+                    fontVariantNumeric: 'tabular-nums',
+                    flex: '0 0 36px',
+                    paddingTop: 2,
+                  }}
+                >
+                  {e.at || '—'}
+                </span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span
+                      style={{
+                        fontSize: 11,
+                        letterSpacing: '.03em',
+                        textTransform: 'uppercase',
+                        color: 'var(--ink-500)',
+                        fontWeight: 500,
+                      }}
+                    >
+                      {e.who}
+                    </span>
+                    {e.isViolation && (
+                      <span
+                        style={{
+                          fontSize: 10,
+                          fontWeight: 700,
+                          letterSpacing: '.05em',
+                          textTransform: 'uppercase',
+                          color: 'var(--danger-500)',
+                          background: 'var(--danger-050)',
+                          borderRadius: 999,
+                          padding: '1px 7px',
+                        }}
+                      >
+                        Breach
+                      </span>
+                    )}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 13,
+                      lineHeight: '20px',
+                      color: e.isViolation ? 'var(--danger-700)' : 'var(--ink-900)',
+                      marginTop: 2,
+                      textWrap: 'pretty',
+                    }}
+                  >
+                    {e.quote}
+                  </div>
+                </div>
               </div>
-            ) : (
-              <p style={{ margin: 0, color: 'var(--ink-700)', lineHeight: '20px', textWrap: 'pretty' }}>
-                The join resolved no service request. Correcting the agent will not repair this on
-                its own — the reported fault still needs raising.
-              </p>
+            ))}
+            {dev.evidence.length === 0 && (
+              <div style={{ fontSize: 13, color: 'var(--ink-600)' }}>
+                No turn-level evidence was recorded for this finding.
+              </div>
             )}
           </div>
-        </Panel>
+        </div>
+      </div>
+
+      <ZoneHeading
+        title="Close it out"
+        hint="Two independent actions — approve the fix, repair the record"
+      />
+
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'minmax(0,1.5fr) minmax(0,1fr)',
+          gap: 16,
+          alignItems: 'start',
+        }}
+      >
+        <FixTheAgent
+          dev={dev}
+          corr={corr}
+          status={status}
+          act={act}
+          onAnalyse={analyse}
+          onApprove={() => run('approveCorrection', { correctionId: corr?.id ?? `CO-${dev.id}` }, 'approve')}
+          onVerify={() => run('verifyCorrection', { correctionId: corr?.id ?? `CO-${dev.id}` }, 'verify')}
+        />
+
+        <FixTheRecord dev={dev} corr={corr} rec={rec} />
       </div>
     </div>
   );
 }
 
-function Row({ k, v }: { k: string; v: string }) {
+const microLabel: React.CSSProperties = {
+  fontSize: 11,
+  letterSpacing: '.04em',
+  textTransform: 'uppercase',
+  color: 'var(--ink-500)',
+  fontWeight: 500,
+};
+
+/** The design's zone divider: a small caps label and a hairline. */
+function ZoneHeading({ title, hint }: { title: string; hint?: string }) {
   return (
-    <div style={{ display: 'flex', gap: 12, alignItems: 'baseline' }}>
-      <span style={{ width: 84, flex: '0 0 84px', fontSize: 12, color: 'var(--ink-500)' }}>{k}</span>
-      <span style={{ minWidth: 0, wordBreak: 'break-word' }}>{v}</span>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '26px 0 10px' }}>
+      <span
+        style={{
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: '.08em',
+          textTransform: 'uppercase',
+          color: 'var(--ink-500)',
+        }}
+      >
+        {title}
+      </span>
+      <span style={{ flex: 1, height: 1, background: 'var(--border-default)' }} />
+      {hint && <span style={{ fontSize: 12, color: 'var(--ink-500)' }}>{hint}</span>}
+    </div>
+  );
+}
+
+function GlanceCell({
+  label: cellLabel,
+  accent,
+  value,
+  fg,
+  detail,
+  onLink,
+}: {
+  label: string;
+  accent: string;
+  value: string;
+  fg: string;
+  detail: string;
+  onLink?: () => void;
+}) {
+  return (
+    <div style={{ padding: '14px 18px', borderRight: '1px solid var(--ink-100)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, ...microLabel }}>
+        <span
+          style={{ width: 6, height: 6, borderRadius: 999, background: accent, flex: '0 0 6px' }}
+        />
+        {cellLabel}
+      </div>
+      <div
+        style={{
+          fontWeight: 600,
+          fontSize: 15,
+          marginTop: 6,
+          lineHeight: '21px',
+          color: fg,
+          textWrap: 'pretty',
+        }}
+      >
+        {value}
+      </div>
+      <div style={{ fontSize: 12, color: 'var(--ink-600)', marginTop: 4, lineHeight: '18px' }}>
+        {detail}
+      </div>
+      {onLink && (
+        <span
+          onClick={onLink}
+          style={{
+            display: 'inline-block',
+            marginTop: 7,
+            fontSize: 12,
+            fontWeight: 500,
+            color: 'var(--blue-500)',
+            cursor: 'pointer',
+          }}
+        >
+          View pattern →
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** The correction lifecycle in the design's vocabulary. */
+function correctionStatus(state?: string | null): { label: string; fg: string } {
+  switch (state) {
+    case 'proposed':
+      return { label: 'Proposed', fg: 'var(--warning-700)' };
+    case 'approved':
+    case 'applied':
+      return { label: 'Applied', fg: 'var(--blue-600)' };
+    case 'verifying':
+      return { label: 'Verifying', fg: 'var(--blue-600)' };
+    case 'resolved':
+      return { label: 'Resolved', fg: 'var(--success-700)' };
+    case 'rejected':
+      return { label: 'Rejected', fg: 'var(--danger-500)' };
+    default:
+      return { label: 'Needs review', fg: 'var(--warning-700)' };
+  }
+}
+
+const STEP_ORDER = ['applied', 'verifying', 'resolved'];
+
+function stepStyle(s: 'done' | 'active' | 'todo') {
+  if (s === 'done')
+    return { mark: '✓', dotBg: 'var(--success-500)', dotFg: '#fff', fg: 'var(--ink-900)', bg: '#fff' };
+  if (s === 'active')
+    return { mark: '•', dotBg: 'var(--blue-500)', dotFg: '#fff', fg: 'var(--blue-600)', bg: 'var(--blue-025)' };
+  return { mark: '', dotBg: 'var(--ink-200)', dotFg: 'var(--ink-500)', fg: 'var(--ink-500)', bg: '#fff' };
+}
+
+/**
+ * Fix the agent — the propose → approve → apply → verify loop, with the
+ * before/after diff and the state progression the design specifies.
+ *
+ * Before any judge has run there is no proposal to show, so the diff keeps its
+ * two panes and says what is missing rather than rendering an invented draft.
+ */
+function FixTheAgent({
+  dev,
+  corr,
+  status,
+  act,
+  onAnalyse,
+  onApprove,
+  onVerify,
+}: {
+  dev: DeviationWithEvidence;
+  corr: CorrectionRecord | null;
+  status: { label: string; fg: string };
+  act: ActionState;
+  onAnalyse: () => void;
+  onApprove: () => void;
+  onVerify: () => void;
+}) {
+  const state = corr?.state ?? null;
+  const isRunning = state !== null && STEP_ORDER.indexOf(state) >= 0;
+  const isResolved = state === 'resolved';
+  const showActions = state === 'proposed' || state === null;
+
+  const cur = STEP_ORDER.indexOf(state ?? '');
+  const steps = [
+    {
+      title: 'Applied',
+      detail: corr?.title ? `${corr.title} — ${corr.target ?? 'agent'}` : 'The correction is written to its target',
+      at: corr?.appliedAt ? 'done' : '',
+    },
+    { title: 'Verifying', detail: 'Re-reading the CMMS record the correction touched', at: state === 'applied' ? 'queued' : '' },
+    { title: 'Resolved', detail: 'The record now satisfies the criterion', at: isResolved ? 'complete' : '' },
+  ].map((s, i) => ({ ...s, ...stepStyle(cur > i ? 'done' : cur === i ? 'active' : 'todo') }));
+
+  return (
+    <div
+      style={{
+        background: '#fff',
+        border: '1px solid var(--blue-100)',
+        borderRadius: 8,
+        overflow: 'hidden',
+      }}
+    >
+      <div
+        style={{
+          padding: '13px 20px',
+          borderBottom: '1px solid var(--border-default)',
+          background: 'var(--blue-025)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 9,
+        }}
+      >
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--brand-indigo-600)" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M12 3v2m0 14v2M5.6 5.6l1.4 1.4m10 10 1.4 1.4M3 12h2m14 0h2M5.6 18.4 7 17m10-10 1.4-1.4" />
+          <circle cx="12" cy="12" r="3.2" />
+        </svg>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <h3 style={{ fontSize: 14, fontWeight: 600, margin: 0 }}>Fix the agent</h3>
+          <div style={{ fontSize: 11, color: 'var(--ink-600)', marginTop: 1 }}>
+            Stops this happening again
+          </div>
+        </div>
+        <span
+          style={{
+            fontSize: 11,
+            fontWeight: 600,
+            padding: '2px 8px',
+            borderRadius: 999,
+            background: 'var(--brand-indigo-050)',
+            color: 'var(--brand-indigo)',
+          }}
+        >
+          AI-drafted
+        </span>
+        <span style={{ fontSize: 12, fontWeight: 600, color: status.fg }}>{status.label}</span>
+      </div>
+
+      <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div>
+          <div style={{ fontWeight: 500, color: corr ? 'var(--ink-900)' : 'var(--ink-500)' }}>
+            {corr?.title || 'No correction drafted yet'}
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--ink-600)', marginTop: 3, lineHeight: '19px' }}>
+            {corr?.rationale ||
+              'The root-cause judge and the proposer have not run on this finding. Nothing is drafted, and nothing is claimed about where the fix belongs.'}
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div style={{ border: '1px solid var(--border-default)', borderRadius: 6, overflow: 'hidden' }}>
+            <div
+              style={{
+                padding: '7px 12px',
+                background: 'var(--ink-050)',
+                borderBottom: '1px solid var(--border-default)',
+                ...microLabel,
+              }}
+            >
+              Current — {corr?.target || 'target not set'}
+            </div>
+            <div
+              style={{
+                padding: 12,
+                fontFamily: 'var(--font-mono)',
+                fontSize: 12,
+                lineHeight: '19px',
+                color: corr?.beforeText ? 'var(--ink-700)' : 'var(--ink-400)',
+                background: 'rgba(182,25,25,0.04)',
+                whiteSpace: 'pre-wrap',
+                minHeight: 60,
+              }}
+            >
+              {corr?.beforeText || '—'}
+            </div>
+          </div>
+          <div style={{ border: '1px solid var(--success-400)', borderRadius: 6, overflow: 'hidden' }}>
+            <div
+              style={{
+                padding: '7px 12px',
+                background: 'var(--success-050)',
+                borderBottom: '1px solid var(--success-400)',
+                ...microLabel,
+                color: 'var(--success-700)',
+              }}
+            >
+              Proposed
+            </div>
+            <div
+              style={{
+                padding: 12,
+                fontFamily: 'var(--font-mono)',
+                fontSize: 12,
+                lineHeight: '19px',
+                color: corr?.afterText ? 'var(--ink-900)' : 'var(--ink-400)',
+                background: 'rgba(41,160,30,0.05)',
+                whiteSpace: 'pre-wrap',
+                minHeight: 60,
+              }}
+            >
+              {corr?.afterText || '—'}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ fontSize: 12, color: 'var(--ink-600)' }}>
+          Applies to{' '}
+          <b style={{ color: 'var(--ink-900)', fontWeight: 500 }}>
+            {corr?.target || 'the helpdesk agent'}
+          </b>{' '}
+          · {dev.criterionId} on this call
+        </div>
+
+        {showActions && (
+          <div
+            style={{
+              display: 'flex',
+              gap: 8,
+              alignItems: 'center',
+              borderTop: '1px solid var(--ink-100)',
+              paddingTop: 14,
+              flexWrap: 'wrap',
+            }}
+          >
+            <button
+              onClick={corr ? onApprove : onAnalyse}
+              disabled={Boolean(act.busy)}
+              style={{
+                height: 36,
+                padding: '0 16px',
+                borderRadius: 4,
+                border: '1px solid var(--blue-500)',
+                background: 'var(--blue-500)',
+                color: '#fff',
+                fontWeight: 500,
+                fontSize: 13,
+                cursor: act.busy ? 'not-allowed' : 'pointer',
+                opacity: act.busy ? 0.7 : 1,
+              }}
+            >
+              {act.busy === 'classify'
+                ? 'Classifying… (~15s)'
+                : act.busy === 'propose'
+                  ? 'Drafting fix… (~20s)'
+                  : act.busy === 'approve'
+                    ? 'Applying…'
+                    : corr
+                      ? 'Approve & apply'
+                      : 'Classify & draft fix'}
+            </button>
+            {corr && (
+              <button
+                onClick={onAnalyse}
+                disabled={Boolean(act.busy)}
+                style={secondaryBtn}
+              >
+                Redraft
+              </button>
+            )}
+            <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--ink-500)' }}>
+              {corr
+                ? 'Nothing is written to the CMMS until you approve.'
+                : 'Both judges run in your browser — the server validates before writing.'}
+            </span>
+          </div>
+        )}
+
+        {isRunning && (
+          <div style={{ border: '1px solid var(--border-default)', borderRadius: 6, overflow: 'hidden' }}>
+            {steps.map((s) => (
+              <div
+                key={s.title}
+                style={{
+                  display: 'flex',
+                  gap: 12,
+                  alignItems: 'flex-start',
+                  padding: '12px 14px',
+                  borderBottom: '1px solid var(--ink-100)',
+                  background: s.bg,
+                }}
+              >
+                <span
+                  style={{
+                    width: 18,
+                    height: 18,
+                    borderRadius: 999,
+                    background: s.dotBg,
+                    color: s.dotFg,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: 11,
+                    fontWeight: 700,
+                    flex: '0 0 18px',
+                    marginTop: 1,
+                  }}
+                >
+                  {s.mark}
+                </span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 500, fontSize: 13, color: s.fg }}>{s.title}</div>
+                  <div style={{ fontSize: 12, color: 'var(--ink-600)', marginTop: 2 }}>{s.detail}</div>
+                </div>
+                <span style={{ fontSize: 11, color: 'var(--ink-500)' }}>{s.at}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {state === 'applied' && (
+          <button onClick={onVerify} disabled={Boolean(act.busy)} style={secondaryBtn}>
+            {act.busy === 'verify' ? 'Verifying…' : 'Verify against the record'}
+          </button>
+        )}
+
+        {isResolved && (
+          <div
+            style={{
+              border: '1px solid var(--success-400)',
+              background: 'var(--success-050)',
+              borderRadius: 6,
+              padding: 14,
+              display: 'flex',
+              gap: 12,
+              alignItems: 'flex-start',
+            }}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--success-700)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ marginTop: 1 }}>
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+            <div>
+              <div style={{ fontWeight: 600, color: 'var(--success-700)' }}>
+                Verified{corr?.appliedRecordId ? ` — SR ${corr.appliedRecordId}` : ''}
+              </div>
+              <div style={{ fontSize: 13, color: 'var(--ink-700)', marginTop: 3 }}>
+                The correction was applied and the CMMS record was re-read to confirm it.
+              </div>
+            </div>
+          </div>
+        )}
+
+        {act.timeout && (
+          <div
+            style={{
+              background: 'var(--warning-050)',
+              border: '1px solid var(--warning-500)',
+              borderRadius: 6,
+              padding: '12px 14px',
+            }}
+          >
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--warning-700)" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="9" />
+                <path d="M12 7v5l3 2" />
+              </svg>
+              <span style={{ fontWeight: 600, color: 'var(--warning-700)' }}>
+                Couldn't complete — the judge timed out
+              </span>
+            </div>
+            <p style={{ margin: '6px 0 0', fontSize: 13, color: 'var(--warning-700)', lineHeight: '19px', textWrap: 'pretty' }}>
+              <strong>This is not a verdict</strong> — nothing has been decided about this finding,
+              and nothing was written. Retry, or leave it and come back.
+            </p>
+          </div>
+        )}
+
+        {act.error && (
+          <div
+            style={{
+              background: 'var(--danger-050)',
+              border: '1px solid var(--danger-500)',
+              borderRadius: 6,
+              padding: '12px 14px',
+            }}
+          >
+            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--danger-700)' }}>
+              That step failed
+            </div>
+            <p style={{ margin: '6px 0 0', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--danger-700)', wordBreak: 'break-word' }}>
+              {act.error}
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const secondaryBtn: React.CSSProperties = {
+  height: 36,
+  padding: '0 14px',
+  borderRadius: 4,
+  border: '1px solid var(--border-default)',
+  background: '#fff',
+  fontWeight: 500,
+  fontSize: 13,
+  cursor: 'pointer',
+};
+
+/**
+ * Fix the record — the CMMS write the proposer drafted, previewed before it runs.
+ *
+ * The design shows this only when the finding has a CMMS action. Here the card
+ * is always present so the second half of "close it out" does not vanish, and
+ * it states plainly when there is nothing to write yet.
+ */
+function FixTheRecord({
+  dev,
+  corr,
+  rec,
+}: {
+  dev: DeviationWithEvidence;
+  corr: CorrectionRecord | null;
+  rec: any;
+}) {
+  const action = corr?.cmmsAction ?? null;
+  const verb = String(action?.verb ?? 'none');
+  const fields: Array<{ label: string; value: string }> = Array.isArray(action?.fields)
+    ? action.fields
+    : [];
+  const hasAction = verb === 'create' || verb === 'update';
+
+  return (
+    <div
+      style={{
+        background: '#fff',
+        border: '1px solid var(--warning-500)',
+        borderRadius: 8,
+        overflow: 'hidden',
+      }}
+    >
+      <div
+        style={{
+          padding: '13px 20px',
+          background: 'var(--warning-050)',
+          borderBottom: '1px solid var(--warning-500)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 9,
+        }}
+      >
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--warning-700)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <ellipse cx="12" cy="5" rx="9" ry="3" />
+          <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
+          <path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3" />
+        </svg>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <h3 style={{ fontSize: 14, fontWeight: 600, margin: 0, color: 'var(--warning-700)' }}>
+            Fix the record
+          </h3>
+          <div style={{ fontSize: 11, color: 'var(--ink-600)', marginTop: 1 }}>
+            Repairs this call in your CMMS
+          </div>
+        </div>
+      </div>
+
+      <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 13 }}>
+        <p style={{ margin: 0, fontSize: 13, lineHeight: '20px', color: 'var(--ink-700)', textWrap: 'pretty' }}>
+          {hasAction
+            ? corr?.rationale || 'The proposer drafted a write against the live CMMS.'
+            : dev.checkedSrId
+              ? `This call resolved to SR ${dev.checkedSrId}. Draft a correction to see what would be written to it.`
+              : 'The join found no service request for this call. Correcting the agent does not raise the missing request — draft a correction to see the write that would.'}
+        </p>
+
+        <div style={{ border: '1px solid var(--border-default)', borderRadius: 6, overflow: 'hidden' }}>
+          <div
+            style={{
+              padding: '8px 12px',
+              background: 'var(--ink-050)',
+              borderBottom: '1px solid var(--border-default)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 7,
+            }}
+          >
+            <span
+              style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: 11,
+                color: 'var(--blue-600)',
+                background: 'var(--blue-025)',
+                border: '1px solid var(--blue-100)',
+                borderRadius: 4,
+                padding: '1px 6px',
+              }}
+            >
+              {verb === 'create'
+                ? 'create-service-request'
+                : verb === 'update'
+                  ? 'update-service-request'
+                  : 'no action'}
+            </span>
+            <span style={microLabel}>
+              {verb === 'create' ? 'New record to write' : verb === 'update' ? 'Changes to apply' : 'Nothing drafted'}
+            </span>
+          </div>
+          <div style={{ padding: '4px 12px' }}>
+            {fields.length > 0 ? (
+              fields.map((f, i) => (
+                <div
+                  key={i}
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    gap: 14,
+                    padding: '7px 0',
+                    borderBottom: '1px solid var(--ink-050)',
+                    alignItems: 'baseline',
+                  }}
+                >
+                  <span style={{ fontSize: 12, color: 'var(--ink-500)', flex: '0 0 auto' }}>
+                    {f.label}
+                  </span>
+                  <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--warning-700)', textAlign: 'right' }}>
+                    {f.value}
+                  </span>
+                </div>
+              ))
+            ) : (
+              <div style={{ padding: '10px 0', fontSize: 12, color: 'var(--ink-400)' }}>
+                — no fields drafted yet
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* The write itself runs from the approve step, which claims an
+            idempotency key before touching the CMMS. There is no separate
+            fire-here button, because two paths to one write is how you get
+            two service requests. */}
+        <span style={{ fontSize: 11, color: 'var(--ink-500)', textAlign: 'center' }}>
+          {hasAction
+            ? `Runs on approval, against the live CMMS. Logged against ${dev.id}.`
+            : `Nothing will be written to the CMMS for ${dev.id} until a correction is drafted and approved.`}
+        </span>
+
+        {rec && (
+          <div style={{ fontSize: 12, color: 'var(--ink-600)', borderTop: '1px solid var(--ink-100)', paddingTop: 11 }}>
+            Current record: <b style={{ color: 'var(--ink-900)', fontWeight: 500 }}>SR {rec.id}</b> ·{' '}
+            {String(rec.moduleState ?? '—')} · {String(rec.urgency ?? '—')}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
