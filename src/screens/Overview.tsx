@@ -290,10 +290,16 @@ export function Overview({
     // the honest source for the headline figures.
     const truncated = convos.length >= ROW_CAP;
 
-    const evaluated = calls.filter((c) => c.evalStatus !== 'not_evaluated').length;
-    const complianceOf = (eva: number, openCount: number) =>
-      eva ? Math.max(Math.round(((eva - openCount) / eva) * 100), 0) : 100;
-    const compliance = truncated ? metrics.compliance : complianceOf(evaluated, open.length);
+    // The share of evaluated calls with nothing open against them — matching
+    // the server's definition exactly. Counting findings instead of calls goes
+    // negative as soon as one call carries several, which is common.
+    const complianceOver = (subset: typeof calls, openSet: typeof open) => {
+      const eva = subset.filter((c) => c.evalStatus !== 'not_evaluated');
+      if (!eva.length) return 100;
+      const flagged = new Set(openSet.map((d) => d.conversationId));
+      return Math.round((eva.filter((c) => !flagged.has(c.id)).length / eva.length) * 100);
+    };
+    const compliance = truncated ? metrics.compliance : complianceOver(calls, open);
 
     const logged = calls.filter((c) => c.srRecordId).length;
     const missing = calls.length - logged;
@@ -319,9 +325,9 @@ export function Overview({
       series = days.map((day) => {
         const upTo = chron.filter((c) => c.startedAt.slice(0, 10) <= day);
         const ids = new Set(upTo.map((c) => c.id));
-        return complianceOf(
-          upTo.filter((c) => c.evalStatus !== 'not_evaluated').length,
-          findings.filter((d) => d.status === 'open' && ids.has(d.conversationId)).length,
+        return complianceOver(
+          upTo,
+          open.filter((d) => ids.has(d.conversationId)),
         );
       });
       sparkBasis = `by day across ${days.length} days`;
@@ -329,9 +335,9 @@ export function Overview({
       series = chron.map((_, i) => {
         const upTo = chron.slice(0, i + 1);
         const ids = new Set(upTo.map((c) => c.id));
-        return complianceOf(
-          upTo.filter((c) => c.evalStatus !== 'not_evaluated').length,
-          findings.filter((d) => d.status === 'open' && ids.has(d.conversationId)).length,
+        return complianceOver(
+          upTo,
+          open.filter((d) => ids.has(d.conversationId)),
         );
       });
       sparkBasis = `after each of ${chron.length} calls`;

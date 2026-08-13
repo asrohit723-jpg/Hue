@@ -198,6 +198,96 @@ server.addHandler({
 });
 
 server.addHandler({
+  name: 'purgeSeeded',
+  description:
+    'Delete every seeded demo conversation, leaving only calls pulled from the helpdesk-call-logs connection. Destructive; requires confirm=1.',
+  parameters: {
+    confirm: { description: 'Must be 1. Guards against an accidental run.', type: 'number' },
+  },
+  execute: async (args) => {
+    const db = connect();
+
+    // Seeded calls are everything that is neither a live call (`L-` prefix) nor
+    // the `__seed__` sentinel. The sentinel is NOT demo data — it is the single
+    // row each table was created from by CSV import, and every query in the app
+    // already excludes it. Deleting it would take the table's shape with it.
+    // Both predicates take the alias: deviations and transcript_turns each have
+    // their own `id`, so a half-qualified clause is ambiguous once joined.
+    const seeded = (a: string) => `${a}.id <> '__seed__' and ${a}.id not like 'L-%'`;
+    const target = seeded('conversations');
+
+    const before = db.query(
+      `select
+         (select count(*) from conversations where ${target}) as conversations,
+         (select count(*) from transcript_turns t
+            where exists (select 1 from conversations c where c.id = t.conversation_id and ${seeded('c')})) as turns,
+         (select count(*) from deviations d
+            where exists (select 1 from conversations c where c.id = d.conversation_id and ${seeded('c')})) as deviations,
+         (select count(*) from transcript_turns
+            where conversation_id not in (select id from conversations)) as orphanTurns,
+         (select count(*) from deviations
+            where conversation_id not in (select id from conversations)) as orphanDeviations`,
+    ).rows[0];
+
+    if (Number(args.confirm) !== 1) {
+      return {
+        deleted: false,
+        wouldDelete: before,
+        note: 'Dry run. Re-run with confirm=1 to delete.',
+      };
+    }
+
+    // Children are deleted explicitly, deepest first.
+    //
+    // schema.sql declares ON DELETE CASCADE on all of these, but the tables in
+    // this database were created by CSV import, which carries no constraints —
+    // so there are no foreign keys and nothing cascades. Deleting only the
+    // parent rows leaves the transcripts and findings behind as orphans that no
+    // JOIN returns, which looks like success while the data is still there.
+    //
+    // The `orphan` clauses also sweep up rows left behind by any earlier delete
+    // that assumed the cascade was real.
+    const orphan = (table: string) =>
+      `delete from ${table} where conversation_id not in (select id from conversations)`;
+
+    db.query(
+      `delete from corrections where deviation_id in (
+         select d.id from deviations d
+          join conversations c on c.id = d.conversation_id
+         where ${seeded('c')})`,
+    );
+    db.query(
+      `delete from deviations where conversation_id in (select id from conversations where ${target})`,
+    );
+    db.query(
+      `delete from transcript_turns where conversation_id in (select id from conversations where ${target})`,
+    );
+    db.query(`delete from conversations where ${target}`);
+
+    // Sweep orphans, including any predating this run. Only the four tables
+    // that actually exist are touched — `criteria`, `eval_runs` and
+    // `notifications` are declared in schema.sql but were never created, since
+    // the tables come from CSV import and `migrate up` cannot run.
+    // Deviations first, then corrections — sweeping corrections while orphaned
+    // deviations still exist makes those corrections look reachable, and they
+    // are stranded again the moment their deviation goes.
+    db.query(orphan('deviations'));
+    db.query(orphan('transcript_turns'));
+    db.query('delete from corrections where deviation_id not in (select id from deviations)');
+
+    const after = db.query(
+      `select
+         (select count(*) from conversations where id <> '__seed__') as conversations,
+         (select count(*) from transcript_turns) as turns,
+         (select count(*) from deviations where id <> '__seed__') as deviations,
+         (select count(*) from corrections) as corrections`,
+    ).rows[0];
+
+    return { deleted: true, removed: before, remaining: after };
+  },
+});
+
+server.addHandler({
   name: 'diag',
   description: 'Report the connected user and what it is allowed to do',
   parameters: {},

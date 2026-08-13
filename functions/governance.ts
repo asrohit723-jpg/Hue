@@ -838,10 +838,26 @@ server.addHandler({
       db.query("select count(*) as n from corrections where state = 'resolved'").rows[0]?.n ?? 0,
     );
 
+    // Compliance is the share of evaluated CALLS that came through clean.
+    //
+    // It used to be (evaluated - openDeviations) / evaluated, which subtracts a
+    // count of findings from a count of calls. That holds up only while calls
+    // average under one finding each: the moment several findings land on one
+    // call it goes negative and clamps to 0, reporting total failure while
+    // calls are still passing. Counting clean calls cannot do that, and is what
+    // "compliance score" is read as anyway.
+    const cleanCalls = Number(
+      db.query(
+        `select count(*) as n from conversations c
+          where c.id <> '__seed__' and c.eval_status <> 'not_evaluated'
+            and not exists (
+              select 1 from deviations d
+               where d.conversation_id = c.id and d.status = 'open')`,
+      ).rows[0]?.n ?? 0,
+    );
+
     const coverage = convoCount ? Math.round((evaluated / convoCount) * 100) : 0;
-    const compliance = evaluated
-      ? Math.round(((evaluated - openDeviations) / evaluated) * 100)
-      : 100;
+    const compliance = evaluated ? Math.round((cleanCalls / evaluated) * 100) : 100;
 
     return {
       callsToday: convoCount,
