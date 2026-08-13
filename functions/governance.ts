@@ -1228,10 +1228,10 @@ server.addHandler({
     }
 
     if (exists) {
-      db.query("update corrections set state='resolved', resolved_at=$2 where id=$1", [
-        corrId,
-        nowIso(),
-      ]);
+      // No resolved_at column: the corrections table's shape comes from the
+      // seed CSV and DDL is not permitted, so `state` carries the outcome and
+      // applied_at carries the timing.
+      db.query("update corrections set state='resolved' where id=$1", [corrId]);
       db.query("update deviations set status='resolved' where id=$1", [corr.deviation_id]);
     }
 
@@ -1357,6 +1357,131 @@ server.addHandler({
         retryable: message.indexOf(JUDGE_TIMEOUT) === 0,
       };
     }
+  },
+});
+
+server.addHandler({
+  name: 'judgeContext',
+  description:
+    'Everything the browser-side judges need for one deviation: the finding, its evidence, the key turns, and the LIVE CMMS record. No model call — fast and never at risk of a timeout.',
+  parameters: { deviationId: { description: 'Deviation id', type: 'string' } },
+  execute: async (args) => {
+    const db = connect();
+    const id = String(args.deviationId ?? '').trim();
+    const { dev, convo, transcript, cmmsRecord } = await deviationContext(db, id);
+    return {
+      deviation: {
+        id: dev.id,
+        criterionId: dev.criterion_id,
+        clauseRef: dev.clause_ref,
+        summary: dev.summary,
+        severity: dev.severity,
+        rootCause: dev.root_cause ?? 'unknown',
+        evidence: JSON.parse(dev.evidence || '[]'),
+      },
+      keyTurns: transcript.slice(-6),
+      cmmsRecord,
+      conversation: {
+        id: convo?.id ?? '',
+        callId: convo?.call_id ?? '',
+        callerName: convo?.caller_name ?? '',
+        siteHint: convo?.site_hint ?? '',
+        cmmsSrId: convo?.cmms_sr_id ?? '',
+      },
+    };
+  },
+});
+
+server.addHandler({
+  name: 'saveCorrection',
+  description:
+    'Persist a verdict produced by the browser-side judges. Validates before writing — a schema constrains shape, not truthfulness, so nothing here trusts the client.',
+  parameters: {
+    deviationId: { description: 'Deviation id', type: 'string' },
+    rootCause: { description: 'agent | data | sow | unknown', type: 'string' },
+    proposalJson: { description: 'The correction proposal, as a JSON string', type: 'string' },
+  },
+  execute: async (args) => {
+    const db = connect();
+    const id = String(args.deviationId ?? '').trim();
+    if (!id) throw new Error('deviationId is required');
+
+    const dev = db.query('select id from deviations where id = $1 limit 1', [id]).rows[0];
+    if (!dev) throw new Error(`No deviation ${id}`);
+
+    // ---- Validate the client's payload before it touches a row -----------
+    const rootCause = String(args.rootCause ?? '').trim();
+    if (['agent', 'data', 'sow', 'unknown'].indexOf(rootCause) < 0) {
+      throw new Error(`Rejected: rootCause must be agent|data|sow|unknown, got "${rootCause}"`);
+    }
+
+    let p: any;
+    try {
+      p = JSON.parse(String(args.proposalJson ?? '{}'));
+    } catch {
+      throw new Error('Rejected: proposalJson is not valid JSON');
+    }
+    const target = String(p?.target ?? '');
+    if (['prompt', 'mapping', 'sow', 'human'].indexOf(target) < 0) {
+      throw new Error(`Rejected: target must be prompt|mapping|sow|human, got "${target}"`);
+    }
+    const verb = String(p?.cmmsAction?.verb ?? 'none');
+    if (['create', 'update', 'none'].indexOf(verb) < 0) {
+      throw new Error(`Rejected: cmmsAction.verb must be create|update|none, got "${verb}"`);
+    }
+
+    db.query('update deviations set root_cause=$2, status=$3 where id=$1', [
+      id,
+      rootCause,
+      'correcting',
+    ]);
+
+    const corrId = `CO-${id}`;
+    const cmmsAction = JSON.stringify(p.cmmsAction ?? {});
+    const prior = db.query('select id from corrections where id = $1 limit 1', [corrId]).rows[0];
+
+    if (prior) {
+      db.query(
+        `update corrections set target=$2, title=$3, rationale=$4, before_text='', after_text=$5,
+           cmms_action=$6, recommended_action=$7, state='proposed' where id=$1`,
+        [
+          corrId,
+          target,
+          String(p.title ?? ''),
+          String(p.rationale ?? ''),
+          String(p.afterText ?? ''),
+          cmmsAction,
+          String(p.humanTask ?? ''),
+        ],
+      );
+    } else {
+      db.query(
+        `insert into corrections
+           (id, deviation_id, target, title, rationale, before_text, after_text, state,
+            recommended_action, assignee, cmms_action, proposed_at)
+         values ($1,$2,$3,$4,$5,'',$6,'proposed',$7,'',$8,$9)`,
+        [
+          corrId,
+          id,
+          target,
+          String(p.title ?? ''),
+          String(p.rationale ?? ''),
+          String(p.afterText ?? ''),
+          String(p.humanTask ?? ''),
+          cmmsAction,
+          nowIso(),
+        ],
+      );
+    }
+
+    return {
+      correctionId: corrId,
+      deviationId: id,
+      rootCause,
+      target,
+      verb,
+      state: 'proposed',
+    };
   },
 });
 

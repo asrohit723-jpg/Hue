@@ -4,12 +4,17 @@ import { api, vibe, type DeviationWithEvidence } from '../lib/vibe';
 import { BootSkeleton } from './BootSkeleton';
 import { BackLink, Button, LoadError, Panel, Pill } from '../components/Chrome';
 import { label, rootCauseTone, severityTone } from '../lib/tone';
+import {
+  classifyRootCause,
+  proposeCorrection,
+  JudgeTimeout,
+  type JudgeContext,
+} from '../lib/judges';
 
 /**
- * Correction actions are not in the typed `api` surface because they are the
- * write path and each is a single judge call that may exceed the sandbox's
- * fetch ceiling. Failures are surfaced verbatim rather than swallowed — a
- * timeout must never read as "nothing to fix".
+ * Server calls used by the correction loop. These are all fast (~1s) and carry
+ * no model work: fetching context, persisting a verdict, writing to the CMMS.
+ * The judges themselves run in the browser — see analyse() below.
  */
 async function callFn<T>(handler: string, args: Record<string, unknown>): Promise<T> {
   return (await vibe.executeFunction('governance', handler, args)) as T;
@@ -26,7 +31,7 @@ interface CorrectionOutcome {
   target?: string;
   title?: string;
   cmmsAction?: unknown;
-  humanAction?: unknown;
+  humanTask?: string;
   state?: string;
   appliedRecordId?: string | null;
   alreadyApplied?: boolean;
@@ -125,6 +130,63 @@ export function InterventionDetail({
     }
   }
 
+  /**
+   * Classify and draft, with both judges running IN THE BROWSER.
+   *
+   * `vibe.executeAgent` has no ~10s ceiling, so the 14s classifier and 20s
+   * proposer both complete — neither could ever finish inside a function. The
+   * verdicts are then posted to the server, which re-validates them before
+   * writing: the browser relays a judgement, it does not get to assert one.
+   */
+  async function analyse() {
+    setAct({ ...IDLE, busy: 'classify' });
+    try {
+      const ctx = await callFn<JudgeContext>('judgeContext', { deviationId: deviationId });
+
+      const rc = await classifyRootCause(ctx);
+      // Show the classification as soon as it lands — the proposal takes
+      // another ~20s and there is no reason to hide finished work.
+      setAct({ ...IDLE, busy: 'propose', outcome: { rootCause: rc.rootCause } });
+
+      const proposal = await proposeCorrection({
+        ...ctx,
+        deviation: { ...ctx.deviation, rootCause: rc.rootCause },
+      });
+
+      const saved = await callFn<CorrectionOutcome>('saveCorrection', {
+        deviationId: deviationId,
+        rootCause: rc.rootCause,
+        proposalJson: JSON.stringify(proposal),
+      });
+
+      setAct({
+        busy: null,
+        error: null,
+        timeout: null,
+        outcome: {
+          ...saved,
+          stage: 'complete',
+          ok: true,
+          rootCause: rc.rootCause,
+          title: proposal.title,
+          humanTask: proposal.humanTask,
+          cmmsAction: proposal.cmmsAction,
+        },
+      });
+      setNonce((n) => n + 1);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setAct((prev) => ({
+        busy: null,
+        // A judge that never answered is unknown, not a pass — same rule as
+        // before, just enforced on this side of the wire now.
+        timeout: err instanceof JudgeTimeout ? msg : null,
+        error: err instanceof JudgeTimeout ? null : msg,
+        outcome: prev.outcome,
+      }));
+    }
+  }
+
   if (error) return <div style={{ padding: '24px 28px', maxWidth: 1240 }}><LoadError message={error} onRetry={() => setNonce((n) => n + 1)} /></div>;
   if (!dev) return <BootSkeleton label="Loading finding…" />;
 
@@ -205,16 +267,14 @@ export function InterventionDetail({
                 create two records.
               </p>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <Button
-                  primary
-                  onClick={() => run('runCorrection', { deviationId: dev.id }, 'analyse')}
-                  disabled={Boolean(act.busy)}
-                >
-                  {act.busy === 'analyse'
-                    ? 'Analysing…'
-                    : act.timeout
-                      ? 'Retry analysis'
-                      : 'Classify & draft fix'}
+                <Button primary onClick={analyse} disabled={Boolean(act.busy)}>
+                  {act.busy === 'classify'
+                    ? 'Classifying… (~15s)'
+                    : act.busy === 'propose'
+                      ? 'Drafting fix… (~20s)'
+                      : act.timeout
+                        ? 'Retry analysis'
+                        : 'Classify & draft fix'}
                 </Button>
                 <Button
                   onClick={() => run('approveCorrection', { correctionId: `CO-${dev.id}` }, 'approve')}
@@ -260,7 +320,7 @@ export function InterventionDetail({
                     )}
                   </p>
                   <div style={{ marginTop: 10 }}>
-                    <Button primary onClick={() => run('runCorrection', { deviationId: dev.id }, 'analyse')} disabled={Boolean(act.busy)}>
+                    <Button primary onClick={analyse} disabled={Boolean(act.busy)}>
                       Retry
                     </Button>
                   </div>
