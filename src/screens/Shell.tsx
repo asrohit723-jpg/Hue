@@ -24,9 +24,6 @@ const ACTIVE_BG = 'var(--blue-025)';
 const ACTIVE_FG = 'var(--blue-600)';
 const IDLE_FG = 'var(--ink-700)';
 
-/** Agents governance will cover later. Present but inert, as in the design. */
-const COMING_SOON = ['Procurement agent', 'Inspection agent', 'Tenant billing agent'];
-
 function navTone(active: boolean) {
   return { background: active ? ACTIVE_BG : 'transparent', color: active ? ACTIVE_FG : IDLE_FG };
 }
@@ -308,47 +305,6 @@ export function Shell({ me }: { me: CurrentUser }) {
             }
           />
 
-          <SectionLabel top={14}>Other agents</SectionLabel>
-          {COMING_SOON.map((name) => (
-            <div
-              key={name}
-              title="Coming soon — governance for this agent is not part of this release"
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-                padding: '8px 10px',
-                borderRadius: 6,
-                fontWeight: 500,
-                color: 'var(--ink-400)',
-                cursor: 'not-allowed',
-              }}
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="9" />
-                <path d="M12 7v5l3 2" />
-              </svg>
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {name}
-              </span>
-              <span
-                style={{
-                  marginLeft: 'auto',
-                  fontSize: 10,
-                  fontWeight: 600,
-                  letterSpacing: '.03em',
-                  textTransform: 'uppercase',
-                  color: 'var(--ink-500)',
-                  background: 'var(--ink-050)',
-                  border: '1px solid var(--border-default)',
-                  borderRadius: 999,
-                  padding: '1px 6px',
-                }}
-              >
-                Soon
-              </span>
-            </div>
-          ))}
         </div>
       </div>
 
