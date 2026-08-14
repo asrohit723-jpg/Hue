@@ -1594,6 +1594,23 @@ server.addHandler({
     });
     const srTotal = srPayload?.count ?? 0;
 
+    // The channel's OWN count of calls, and how they split by channel.
+    //
+    // Deliberately not derived from what Hue stores: the gap between the two is
+    // ingest lag, which is worth seeing rather than hiding behind a single
+    // number. A channel outage degrades this to null — the dashboard is built
+    // from stored findings and must not go down because the phone system did.
+    let callStats: { total: number; byType: Record<string, number> } | null = null;
+    try {
+      const stats = await callLogs('get-call-stats', {});
+      const raw = stats?.byType ?? stats?.data?.byType ?? {};
+      const byType: Record<string, number> = {};
+      for (const k of Object.keys(raw)) byType[String(k)] = Number(raw[k]) || 0;
+      callStats = { total: Number(stats?.total ?? 0) || 0, byType };
+    } catch {
+      callStats = null;
+    }
+
     const convoCount = Number(
       db.query("select count(*) as n from conversations where id <> '__seed__'").rows[0]?.n ?? 0,
     );
@@ -1673,6 +1690,8 @@ server.addHandler({
       verified,
       /** Live CMMS total, for the "Requests logged" card's denominator context. */
       srTotal,
+      /** The call channel's own totals. null when the channel is unreachable. */
+      callStats,
       sites,
       isFirstRun: convoCount === 0,
     };
@@ -2221,6 +2240,49 @@ server.addHandler({
       // them as passed.
       notRunnable,
       items: [...seeded, ...generated],
+    };
+  },
+});
+
+server.addHandler({
+  name: 'callRecording',
+  description:
+    "A playable URL for one call's recording, fetched fresh on every request. The channel returns a PRE-SIGNED url that expires, so this is never cached or stored — a stored one becomes a play button that works until it silently does not.",
+  parameters: { conversationId: { description: 'Conversation id', type: 'string' } },
+  execute: async (args) => {
+    const db = connect();
+    const convoId = String(args.conversationId ?? '').trim();
+    const convo = db.query('select * from conversations where id = $1 limit 1', [convoId]).rows[0];
+    if (!convo) throw new Error(`No conversation ${convoId}`);
+
+    // Only calls pulled from the connection can have one. A seeded demo call
+    // has no upstream record to ask about.
+    if (!String(convo.id ?? '').startsWith('L-') || !convo.call_id) {
+      return { available: false, reason: 'This call did not come from the call channel.' };
+    }
+
+    // recordingFileId lives on the full call log, not the list row, so it is
+    // read here rather than trusted from anything stored.
+    const payload = await callLogs('get-call-log', { callLogId: Number(convo.call_id) });
+    const fileId = Number(callRecordOf(payload)?.recordingFileId) || 0;
+    if (!fileId) {
+      return { available: false, reason: 'The channel holds no recording for this call.' };
+    }
+
+    const rec = await callLogs('get-call-recording', { fileId });
+    const url = String(rec?.file_signed_url ?? rec?.data?.file_signed_url ?? '');
+    if (!url) {
+      // The channel knows the file but would not hand one over. Reporting that
+      // plainly beats a play button that does nothing when pressed.
+      return { available: false, reason: 'The channel returned no download URL for this recording.' };
+    }
+
+    return {
+      available: true,
+      url,
+      fileId,
+      contentType: String(rec?.content_type ?? 'audio/wav'),
+      sizeBytes: Number(rec?.size) || 0,
     };
   },
 });

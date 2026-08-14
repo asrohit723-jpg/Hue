@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   api,
   type CallGrade,
@@ -671,6 +671,7 @@ export function ConversationDetail({
           <RecordingBar
             durationLabel={duration(c.durationSec)}
             recordingFileId={data.recordingFileId}
+            conversationId={c.id}
           />
           <div
             style={{
@@ -855,11 +856,74 @@ export function ConversationDetail({
 function RecordingBar({
   durationLabel,
   recordingFileId,
+  conversationId,
 }: {
   durationLabel: string;
   recordingFileId: number | null;
+  conversationId: string;
 }) {
   const has = recordingFileId !== null;
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [url, setUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [playing, setPlaying] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [at, setAt] = useState(0);
+  const [total, setTotal] = useState(0);
+
+  // A new call means a new recording. Without this the player would keep the
+  // previous call's audio when you move between records.
+  useEffect(() => {
+    audioRef.current?.pause();
+    setUrl(null);
+    setPlaying(false);
+    setError(null);
+    setAt(0);
+    setTotal(0);
+  }, [conversationId]);
+
+  /**
+   * Fetch on press, never before and never cached.
+   *
+   * The channel returns a pre-signed URL that expires, so asking for it at the
+   * moment of playing is the only way the button keeps working. It also means
+   * opening a call costs nothing until someone actually wants to listen.
+   */
+  async function toggle() {
+    setError(null);
+    const el = audioRef.current;
+    if (playing && el) {
+      el.pause();
+      return;
+    }
+    if (url && el) {
+      await el.play().catch((e) => setError(e instanceof Error ? e.message : String(e)));
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await api.callRecording(conversationId);
+      if (!res.available || !res.url) {
+        setError(res.reason || 'No recording available for this call.');
+        return;
+      }
+      setUrl(res.url);
+      // Wait for the element to take the src before asking it to play.
+      window.setTimeout(() => {
+        audioRef.current
+          ?.play()
+          .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+      }, 0);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const clock2 = (sec: number) =>
+    `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
+
   return (
     <div
       style={{
@@ -870,10 +934,33 @@ function RecordingBar({
         gap: 14,
       }}
     >
-      <button className="hue-btn"
-        disabled
-        title={has ? 'Playback is not wired yet' : 'No recording for this call'}
-        aria-label="Play recording"
+      {url ? (
+        <audio
+          ref={audioRef}
+          src={url}
+          preload="metadata"
+          onPlay={() => setPlaying(true)}
+          onPause={() => setPlaying(false)}
+          onEnded={() => setPlaying(false)}
+          onTimeUpdate={(e) => setAt(e.currentTarget.currentTime)}
+          onLoadedMetadata={(e) => setTotal(e.currentTarget.duration || 0)}
+          onError={() => setError('The recording could not be played.')}
+          style={{ display: 'none' }}
+        />
+      ) : null}
+
+      <button
+        className="hue-btn"
+        onClick={toggle}
+        disabled={!has || loading}
+        title={
+          has
+            ? playing
+              ? 'Pause'
+              : 'Play the call recording'
+            : 'No recording for this call'
+        }
+        aria-label={playing ? 'Pause recording' : 'Play recording'}
         style={{
           width: 36,
           height: 36,
@@ -885,54 +972,105 @@ function RecordingBar({
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          cursor: 'not-allowed',
+          cursor: has && !loading ? 'pointer' : 'not-allowed',
         }}
       >
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M8 5.5v13l11-6.5z" />
-        </svg>
+        {loading ? (
+          <span className="hue-spinner" aria-hidden="true" />
+        ) : playing ? (
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+            <rect x="6" y="5" width="4" height="14" rx="1" />
+            <rect x="14" y="5" width="4" height="14" rx="1" />
+          </svg>
+        ) : (
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M8 5.5v13l11-6.5z" />
+          </svg>
+        )}
       </button>
-      <div style={{ flex: 1, height: 6, borderRadius: 999, background: 'var(--ink-100)' }}>
-        <div style={{ height: '100%', borderRadius: 999, background: 'var(--blue-500)', width: '0%' }} />
-      </div>
+
+      {/* Seekable once loaded — the channel's URL supports range requests, so
+          scrubbing genuinely works rather than restarting the file. */}
+      <input
+        type="range"
+        min={0}
+        max={total > 0 ? total : 1}
+        step={0.1}
+        value={at}
+        disabled={!url || total <= 0}
+        onChange={(e) => {
+          const next = Number(e.target.value);
+          setAt(next);
+          if (audioRef.current) audioRef.current.currentTime = next;
+        }}
+        aria-label="Seek within the recording"
+        style={{
+          flex: 1,
+          height: 6,
+          accentColor: 'var(--blue-500)',
+          cursor: url && total > 0 ? 'pointer' : 'default',
+          opacity: url ? 1 : 0.55,
+        }}
+      />
+
       <span
         style={{
           fontSize: 12,
-          color: 'var(--ink-600)',
+          color: error ? 'var(--danger-700)' : 'var(--ink-600)',
           fontVariantNumeric: 'tabular-nums',
           whiteSpace: 'nowrap',
+          maxWidth: 260,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
         }}
+        title={error ?? undefined}
       >
-        {has ? `0:00 / ${durationLabel}` : 'No recording'}
+        {error
+          ? error
+          : !has
+            ? 'No recording'
+            : url
+              ? `${clock2(at)} / ${total > 0 ? clock2(total) : durationLabel}`
+              : `0:00 / ${durationLabel}`}
       </span>
-      <button className="hue-btn"
-        disabled={!has}
-        title={has ? `Recording file ${recordingFileId}` : 'No recording for this call'}
+
+      <a
+        className="hue-btn"
+        href={url ?? undefined}
+        download={url ? `call-${conversationId}.wav` : undefined}
+        title={
+          has
+            ? url
+              ? 'Download this recording'
+              : 'Press play first — the download link is fetched with the audio'
+            : 'No recording for this call'
+        }
         aria-label="Download recording"
+        aria-disabled={!url}
         style={{
           width: 34,
           height: 34,
           borderRadius: 4,
           border: '1px solid var(--border-default)',
           background: '#fff',
-          color: has ? 'var(--ink-600)' : 'var(--ink-300)',
+          color: url ? 'var(--ink-600)' : 'var(--ink-300)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          cursor: has ? 'pointer' : 'not-allowed',
+          cursor: url ? 'pointer' : 'not-allowed',
+          pointerEvents: url ? 'auto' : 'none',
         }}
       >
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
           <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
           <polyline points="7 10 12 15 17 10" />
-          <path d="M12 15V3" />
+          <line x1="12" y1="15" x2="12" y2="3" />
         </svg>
-      </button>
+      </a>
     </div>
   );
 }
 
-/** The design's three-tab quality card. */
 function QualityCard({
   conversation: c,
   deviations,

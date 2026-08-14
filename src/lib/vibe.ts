@@ -72,6 +72,13 @@ export interface OverviewMetrics {
   sites: string[];
   /** True when the org has no conversations yet — drives the first-run screen. */
   isFirstRun: boolean;
+  /**
+   * The call channel's OWN totals and its split by channel type.
+   *
+   * Not derived from what Hue stores — the gap between the two is ingest lag,
+   * which is worth seeing. null when the channel is unreachable.
+   */
+  callStats: { total: number; byType: Record<string, number> } | null;
 }
 
 /**
@@ -557,6 +564,23 @@ export const api = {
       upstreamReadable: boolean;
       upstreamDrifted: boolean;
     }>('governance', 'currentSow'),
+
+  /**
+   * A playable URL for one call's recording.
+   *
+   * Fetched on demand and never stored: the channel hands back a PRE-SIGNED
+   * url that expires, so a cached one becomes a play button that works until
+   * it silently does not.
+   */
+  callRecording: (conversationId: string) =>
+    call<{
+      available: boolean;
+      reason?: string;
+      url?: string;
+      fileId?: number;
+      contentType?: string;
+      sizeBytes?: number;
+    }>('governance', 'callRecording', { conversationId }),
 
   /** Store the scope of work, and learn whether it CHANGED. */
   saveSow: (a: { body: string; title: string; savedBy: string }) =>

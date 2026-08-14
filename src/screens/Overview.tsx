@@ -766,6 +766,21 @@ export function Overview({
           value={String(v.metrics.corrections)}
           sub={`all time, ${v.metrics.verified} verified`}
         />
+        {/* The CHANNEL's own count, not Hue's. The two can differ while ingest
+            is behind, and that gap is worth seeing rather than smoothing over —
+            so this says where the number came from. */}
+        <Kpi
+          label="On the call channel"
+          value={v.metrics.callStats ? String(v.metrics.callStats.total) : '—'}
+          sub={
+            v.metrics.callStats
+              ? Object.entries(v.metrics.callStats.byType)
+                  .sort((a, b) => b[1] - a[1])
+                  .map(([k, n]) => `${n} ${k.toLowerCase()}`)
+                  .join(' · ') || 'no breakdown reported'
+              : 'the call channel is unreachable'
+          }
+        />
       </div>
 
       {/* deviations by type + sentiment split */}
