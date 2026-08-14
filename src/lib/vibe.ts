@@ -1,4 +1,5 @@
 import { createVibe } from '@facilio/vibe-sdk';
+import type { GradingState } from './grading';
 import type {
   Conversation,
   Deviation,
@@ -97,6 +98,8 @@ export interface ConversationRow {
   deviation_count?: number;
   /** The caller's opening line, for the list row's second line. */
   snippet?: string | null;
+  /** Where this call is in grading, derived server-side. */
+  grading?: GradingState;
 }
 
 export interface DeviationRow {
@@ -199,6 +202,12 @@ export type ConversationView = Conversation & {
    */
   callerLabel: string;
   /**
+   * Where the call is in grading — awaiting, grading, graded or unavailable.
+   * Derived on the server from eval_status and the call's claim/grade row, so
+   * the list and the detail screen cannot tell different stories.
+   */
+  grading: GradingState | null;
+  /**
    * The reference the agent read back to the caller. Distinct from
    * `srRecordId`, which is the record the join actually resolved — when the
    * agent invents a number, this is set and that one is not.
@@ -264,6 +273,7 @@ export function toConversation(
     // Falls through name -> phone -> nothing, so a live call with no name is
     // still identified by the number that rang in rather than "Unknown caller".
     callerLabel: r.caller_name || r.caller_phone || 'Unknown caller',
+    grading: r.grading ?? null,
   };
 }
 
@@ -360,6 +370,8 @@ export const api = {
     satisfaction: string | null;
     /** The stored grade, or null when this call has never been graded. */
     grade: CallGrade | null;
+    /** Where the call is in grading. Present even when there is no grade. */
+    grading: GradingState | null;
   }> => {
     const res = await call<{
       conversation: ConversationRow;
@@ -372,6 +384,7 @@ export const api = {
       aiTags?: string | null;
       satisfaction?: string | null;
       grade?: CallGrade | null;
+      grading?: GradingState | null;
     }>('governance', 'getConversation', { id });
     return {
       transcriptSource: res.transcriptSource ?? 'stored',
@@ -383,6 +396,7 @@ export const api = {
       deviations: res.deviations.map(withExtras),
       cmmsRecord: res.cmmsRecord,
       grade: res.grade ?? null,
+      grading: res.grading ?? null,
     };
   },
 
@@ -448,6 +462,20 @@ export const api = {
       graded: number;
       intervalSeconds: number;
     }>('governance', 'syncStatus'),
+
+  /**
+   * Where every call is in grading — or one call, when given an id.
+   *
+   * Deliberately light: no CMMS read, no transcript, no findings. The screens
+   * poll it every few seconds WHILE something is in flight and stop the moment
+   * nothing is, so a settled app makes no requests at all.
+   */
+  gradingStatus: (conversationId = '') =>
+    call<{ items: Array<GradingState & { id: string }>; inFlight: number }>(
+      'governance',
+      'gradingStatus',
+      { conversationId },
+    ),
 
   /**
    * Pull in any calls that have arrived since the page loaded.

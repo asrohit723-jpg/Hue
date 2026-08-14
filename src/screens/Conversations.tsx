@@ -3,6 +3,7 @@ import { api, type ConversationView } from '../lib/vibe';
 import { BootSkeleton } from './BootSkeleton';
 import { LoadError } from '../components/Chrome';
 import { avatarColor, clock, duration, evalTone, initials, label, sentimentTone } from '../lib/tone';
+import { gradingLabel, gradingTone, inFlight } from '../lib/grading';
 import { page } from '../lib/layout';
 
 /**
@@ -19,7 +20,10 @@ import { page } from '../lib/layout';
 const FILTERS = ['All calls', 'Flagged', 'Passed', 'No SR created'] as const;
 type Filter = (typeof FILTERS)[number];
 
-const COLS = '104px minmax(240px,2fr) 130px 104px 74px 24px';
+// The first column carries two lines now — the grading stage and, once there
+// is one, the verdict — so it needs a little more room than the old single
+// "Result" label did.
+const COLS = '132px minmax(240px,2fr) 130px 104px 74px 24px';
 
 const headCell: React.CSSProperties = {
   fontSize: 11,
@@ -120,6 +124,50 @@ export function Conversations({
       cancelled = true;
     };
   }, [nonce, refreshSignal]);
+
+  // Is anything still moving? Drives the poll below, and stops it dead once
+  // every call has settled — a quiet app should make no requests at all.
+  const pending = (items ?? []).some((c) => inFlight(c.grading));
+
+  /**
+   * Keep the grading column honest without a manual reload.
+   *
+   * Polls the LIGHT status handler — no CMMS read, no transcript, no findings —
+   * and merges it into the rows already on screen. When a call settles, the
+   * full list is re-read once, because the verdict and the finding count come
+   * from a query this one deliberately does not run.
+   */
+  useEffect(() => {
+    if (!pending) return;
+    let cancelled = false;
+
+    const id = window.setInterval(async () => {
+      try {
+        const { items: states } = await api.gradingStatus();
+        if (cancelled) return;
+        const byId = new Map(states.map((s) => [s.id, s]));
+
+        let settled = false;
+        setItems((prev) =>
+          (prev ?? []).map((c) => {
+            const next = byId.get(c.id);
+            if (!next || next.status === c.grading?.status) return c;
+            if (!inFlight(next)) settled = true;
+            return { ...c, grading: next };
+          }),
+        );
+        if (settled) setNonce((n) => n + 1);
+      } catch {
+        // A poll that fails is not an error worth showing — the next one is
+        // four seconds away, and the list on screen is still real.
+      }
+    }, 4000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [pending]);
 
   const sites = useMemo(
     () => [
@@ -355,7 +403,7 @@ export function Conversations({
               ...headCell,
             }}
           >
-            <span>Result</span>
+            <span>Grading</span>
             <span>Caller</span>
             <span>Outcome</span>
             <span>Sentiment</span>
@@ -396,6 +444,7 @@ export function Conversations({
 
 function CallRow({ c, onOpen }: { c: ConversationView; onOpen: () => void }) {
   const ev = evalTone(c.evalStatus);
+  const g = gradingTone(c.grading);
   const sent = sentimentTone(c.sentiment);
   // Live call logs usually have no caller name, so this is the phone number.
   const name = c.callerLabel;
@@ -423,23 +472,42 @@ function CallRow({ c, onOpen }: { c: ConversationView; onOpen: () => void }) {
         background: '#fff',
       }}
     >
-      <span
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-          fontSize: 11,
-          fontWeight: 600,
-          textTransform: 'uppercase',
-          letterSpacing: '.03em',
-          color: ev.fg,
-        }}
-      >
+      {/* Where the call IS, then what grading found. Two different questions,
+          and collapsing them used to hide the first: a call that had never been
+          graded and one whose grading died both read as "Awaiting grading". */}
+      <div style={{ minWidth: 0 }}>
         <span
-          style={{ width: 7, height: 7, borderRadius: 999, background: ev.fg, flex: '0 0 7px' }}
-        />
-        {c.evalStatus === 'not_evaluated' ? 'Awaiting grading' : label(c.evalStatus)}
-      </span>
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            fontSize: 11,
+            fontWeight: 600,
+            textTransform: 'uppercase',
+            letterSpacing: '.03em',
+            color: g.fg,
+          }}
+        >
+          {c.grading?.status === 'grading' ? (
+            <span className="hue-spinner" style={{ width: 9, height: 9, flex: '0 0 9px', borderWidth: 1.5 }} />
+          ) : (
+            <span
+              style={{ width: 7, height: 7, borderRadius: 999, background: g.fg, flex: '0 0 7px' }}
+            />
+          )}
+          {gradingLabel(c.grading)}
+        </span>
+        {/* The verdict, once there is one. Kept under the status rather than
+            replacing it — "Flagged" is the outcome, not the stage. */}
+        {c.grading?.status === 'graded' && c.evalStatus !== 'not_evaluated' ? (
+          <span style={{ display: 'block', fontSize: 11, color: ev.fg, marginTop: 2 }}>
+            {label(c.evalStatus)}
+            {c.grading.criteriaUnavailable > 0
+              ? ` · ${c.grading.criteriaUnavailable} unreachable`
+              : ''}
+          </span>
+        ) : null}
+      </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 11, minWidth: 0 }}>
         <span

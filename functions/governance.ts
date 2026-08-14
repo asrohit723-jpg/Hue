@@ -348,6 +348,68 @@ function readGrade(row: any) {
   };
 }
 
+/**
+ * Where one call is in grading, derived from state that already exists.
+ *
+ * There is no status column and there must not be one — a second place to
+ * record "is this graded" is a second place to be wrong. Everything here is
+ * read off `conversations.eval_status` and the call's `call_grades` row.
+ *
+ * THE TWO PASSES ARE DIFFERENT THINGS, and the caller needs to be able to tell
+ * them apart:
+ *
+ *   - the DETERMINISTIC pass (the job, the nudge, `evaluate`) runs the coded
+ *     checks against the live CMMS and sets `eval_status`. It never writes
+ *     `graded_at`, because it has no analyst to record — an agent cannot run
+ *     inside a Studio Function at all.
+ *   - the AI ANALYSIS (manual "Run evals") writes the grade row, and its
+ *     `graded_at` / `graded_by` are what this reports as the grading stamp.
+ *
+ * So `graded_at` alone cannot mean "done": most graded calls in this app have
+ * never been analysed. A call is GRADED once either pass has produced
+ * something, and the flags below say which.
+ */
+function gradingStateOf(row: any) {
+  const evalStatus = String(row.eval_status ?? 'not_evaluated');
+  const claimedAt = String(row.claimed_at ?? '');
+  const claimedBy = String(row.claimed_by ?? '');
+  const gradedAt = String(row.graded_at ?? '');
+  const unavailableIds = idList(row.criteria_unavailable);
+
+  // The deterministic pass has spoken. The AI analysis has been stored.
+  const checksRun = evalStatus !== 'not_evaluated';
+  const analysed = gradedAt !== '';
+
+  // A claim that has not produced anything yet is a pass IN FLIGHT. Once it has
+  // produced something the claim is history, whether or not it was released —
+  // rows graded before claims were released on success still read correctly.
+  const inFlight = claimedAt !== '' && !checksRun && !analysed;
+  const stale = inFlight && claimedAt < isoAgo(CLAIM_TTL_MS);
+
+  let status: string;
+  if (checksRun || analysed) status = 'graded';
+  else if (stale) status = 'unavailable';
+  else if (inFlight) status = 'grading';
+  else status = 'awaiting';
+
+  return {
+    status,
+    // Which pass produced what, so "graded" is never mistaken for "analysed".
+    checksRun,
+    analysed,
+    evalStatus,
+    gradedAt,
+    gradedBy: String(row.graded_by ?? ''),
+    claimedAt,
+    claimedBy,
+    criteriaGraded: idList(row.criteria_graded).length,
+    // Judges that never answered. Carried so a partial grade is never rendered
+    // as a clean one — the same never-fake-a-pass rule, made visible.
+    criteriaUnavailable: unavailableIds.length,
+    unavailableIds,
+  };
+}
+
 function nowIso(startedAtFallback?: string) {
   // The sandbox has Date but the run has no wall-clock guarantee worth relying
   // on for ordering; use Date for stamps and let ISO strings sort naturally.
@@ -1017,6 +1079,30 @@ function claimNextForGrading(db: any, by: string): string | null {
 }
 
 /**
+ * Hand the claim back once the pass has actually finished.
+ *
+ * The deterministic pass sets `eval_status` and never writes `graded_at` — it
+ * has no analyst to record — so nothing ever marked its claim complete and a
+ * finished call held one until the TTL reaped it. Harmless for claiming (a
+ * graded call is no longer a candidate), but it is what a reader sees: without
+ * this, every automatically graded call reports "grading" for ten minutes.
+ *
+ * Only the holder may release it. A fire that lost its claim to a reaper must
+ * not clear the claim of whoever legitimately took over.
+ *
+ * A FAILED grade is NOT released, deliberately — the claim is the backoff (see
+ * CLAIM_TTL_MS), so a call whose grade throws reads as "grading" until the TTL
+ * and then as "unavailable". There is no error column to say so any sooner.
+ */
+function releaseGradeClaim(db: any, convoId: string, by: string) {
+  db.query(
+    `update call_grades set claimed_at = '', claimed_by = ''
+      where conversation_id = $1 and claimed_by = $2`,
+    [convoId, by],
+  );
+}
+
+/**
  * Claim and grade until the limit or the budget runs out.
  *
  * The single path to scheduled grading. The job and the reload nudge differ
@@ -1048,6 +1134,7 @@ async function gradeClaimed(by: string, limit: number, budgetMs: number) {
 
     try {
       const res = await gradeConversation(convoId);
+      releaseGradeClaim(db, convoId, by);
       graded.push({
         id: convoId,
         findings: res.deviationsFound ?? 0,
@@ -1294,6 +1381,9 @@ server.addHandler({
     // `snippet` is the caller's opening line — what the call was actually about.
     // The list shows it under the caller's name, and it is read from the stored
     // transcript rather than summarised, so the row quotes the caller verbatim.
+    // The grade row comes along for the ride so every row can say where it is
+    // in grading. Left join: a call that has never been claimed has no row, and
+    // that absence is itself a state ("awaiting"), not a missing record.
     const { rows } = db.query(
       `select c.*,
               (select count(*) from deviations d where d.conversation_id = c.id) as deviation_count,
@@ -1301,14 +1391,18 @@ server.addHandler({
                  from transcript_turns t
                 where t.conversation_id = c.id and t.performer = 'caller'
                 order by t.turn_index
-                limit 1) as snippet
+                limit 1) as snippet,
+              g.claimed_at, g.claimed_by, g.graded_at, g.graded_by,
+              g.criteria_graded, g.criteria_unavailable
          from conversations c
+         left join call_grades g
+                on g.conversation_id = c.id and g.id <> '__seed__'
         where c.id <> '__seed__'
         order by c.started_at desc
         limit $1`,
       [limit],
     );
-    return { items: rows };
+    return { items: rows.map((r: any) => ({ ...r, grading: gradingStateOf(r) })) };
   },
 });
 
@@ -1422,6 +1516,15 @@ server.addHandler({
     ).rows[0];
     const grade = gradeRow ? readGrade(gradeRow) : null;
 
+    // Where this call is in grading. Read from the claim row, which exists
+    // whether or not the call was ever analysed — so this must NOT reuse
+    // `gradeRow` above, which is deliberately blind to a claim.
+    const claimRow = db.query(
+      `select * from call_grades where conversation_id = $1 and id <> '__seed__' limit 1`,
+      [id],
+    ).rows[0];
+    const grading = gradingStateOf({ ...(claimRow ?? {}), eval_status: convo.eval_status });
+
     // Ground truth, fetched live at read time.
     //
     // The filter must be `id(equals)=N`, the same verified syntax the join
@@ -1451,6 +1554,37 @@ server.addHandler({
       deviations: deviations.map((d: any) => ({ ...d, evidence: JSON.parse(d.evidence || '[]') })),
       cmmsRecord,
       grade,
+      grading,
+    };
+  },
+});
+
+server.addHandler({
+  name: 'gradingStatus',
+  description:
+    'Where each call is in grading — awaiting, grading, graded or unavailable. Deliberately light: no CMMS call, no transcript, no findings, because the screens poll this every few seconds while anything is in flight.',
+  parameters: {
+    conversationId: { description: 'One call, or empty for all of them', type: 'string' },
+  },
+  execute: async (args) => {
+    const db = connect();
+    const only = String(args.conversationId ?? '').trim();
+
+    const sql = `select c.id, c.eval_status,
+                        g.claimed_at, g.claimed_by, g.graded_at, g.graded_by,
+                        g.criteria_graded, g.criteria_unavailable
+                   from conversations c
+                   left join call_grades g
+                          on g.conversation_id = c.id and g.id <> '__seed__'
+                  where c.id <> '__seed__' ${only ? 'and c.id = $1' : ''}
+                  order by c.started_at desc`;
+    const { rows } = only ? db.query(sql, [only]) : db.query(sql);
+
+    const items = rows.map((r: any) => ({ id: String(r.id), ...gradingStateOf(r) }));
+    return {
+      items,
+      // What the screens poll on: when nothing is moving, they stop asking.
+      inFlight: items.filter((i: any) => i.status === 'grading' || i.status === 'awaiting').length,
     };
   },
 });

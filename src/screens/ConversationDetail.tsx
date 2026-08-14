@@ -13,6 +13,7 @@ import criteriaSeed from '../../evals/criteria.seed.json';
 import { WIRED_CRITERIA, layerOf } from '../lib/criteria';
 
 import { avatarColor, clock, duration, evalTone, initials, label, sentimentTone } from '../lib/tone';
+import { gradingDetail, gradingLabel, gradingTone, inFlight } from '../lib/grading';
 import { page } from '../lib/layout';
 
 /**
@@ -53,6 +54,8 @@ interface Loaded {
   aiSummary: string | null;
   aiTags: string | null;
   satisfaction: string | null;
+  /** Where the call is in grading. Present even when there is no grade yet. */
+  grading: import('../lib/vibe').ConversationView['grading'];
 }
 
 type QualityTab = 'score' | 'eval' | 'sentiment';
@@ -201,6 +204,9 @@ export function ConversationDetail({
   const [nonce, setNonce] = useState(0);
   const [tab, setTab] = useState<QualityTab>('score');
   const [grading, setGrading] = useState<string | null>(null);
+  // How many criteria this run has attempted. Real, because the loop below
+  // walks a known list — not a guess at how far a server-side pass has got.
+  const [gradedSoFar, setGradedSoFar] = useState(0);
   const [gradeSummary, setGradeSummary] = useState<string | null>(null);
   const [analysis, setAnalysis] = useState<CallAnalysis | null>(null);
   const [analysisChannelSentiment, setAnalysisChannelSentiment] = useState<string | null>(null);
@@ -230,6 +236,42 @@ export function ConversationDetail({
   }, [id, nonce]);
 
   /**
+   * Watch this one call while its grading is still moving.
+   *
+   * Polls the light status handler, not `getConversation` — that one reads the
+   * CMMS and the call-log channel live on every call, which is far too much to
+   * repeat every four seconds just to learn whether a pass has finished.
+   *
+   * A run happening in THIS tab is excluded: the local progress counter is
+   * better information than a poll, and the reload at the end of it picks up
+   * everything the run produced.
+   */
+  const pending = inFlight(data?.grading) && !grading;
+  useEffect(() => {
+    if (!pending) return;
+    let cancelled = false;
+
+    const timer = window.setInterval(async () => {
+      try {
+        const { items } = await api.gradingStatus(id);
+        const next = items[0];
+        if (cancelled || !next) return;
+        // Settled — re-read in full, because the verdict, the findings and the
+        // grade's prose all come from queries the status handler does not run.
+        if (!inFlight(next)) setNonce((n) => n + 1);
+        else setData((prev) => (prev ? { ...prev, grading: next } : prev));
+      } catch {
+        // The next poll is four seconds away; a blip is not worth a message.
+      }
+    }, 4000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [pending, id]);
+
+  /**
    * Grade this call's semantic criteria — only when asked.
    *
    * This used to run automatically on open, which meant simply browsing the app
@@ -248,6 +290,7 @@ export function ConversationDetail({
       const runs = [];
       for (const criterionId of SEMANTIC_CRITERIA) {
         setGrading(criterionId);
+        setGradedSoFar(runs.length + 1);
         runs.push(await runSemanticCriterion(id, criterionId));
       }
       // The call analysis is the last step of the same deliberate action, so a
@@ -288,6 +331,7 @@ export function ConversationDetail({
       setGradeSummary(err instanceof Error ? err.message : String(err));
     } finally {
       setGrading(null);
+      setGradedSoFar(0);
     }
   }
 
@@ -302,6 +346,8 @@ export function ConversationDetail({
 
   const { conversation: c, deviations, cmmsRecord } = data;
   const ev = evalTone(c.evalStatus);
+  // A run in this tab is the live truth; otherwise the polled state is.
+  const gt = grading ? { bg: 'var(--blue-050)', fg: 'var(--blue-600)' } : gradingTone(data.grading);
   const sent = sentimentTone(c.sentiment);
   // Live call logs usually have no caller name, so this is the phone number.
   const name = c.callerLabel;
@@ -374,25 +420,57 @@ export function ConversationDetail({
             )}
             {!gradeSummary && c.evalStatus === 'not_evaluated' && (
               <span style={{ color: 'var(--ink-500)' }}>
-                {' '}· not graded yet — the scheduled job picks it up within 15 minutes, or run
-                the evals now
+                {' '}·{' '}
+                {data.grading?.status === 'grading'
+                  ? 'the checks are running now — this updates on its own'
+                  : 'the checks run automatically when a call arrives; Run evals adds the AI analysis'}
               </span>
             )}
           </p>
         </div>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
-          <span
-            style={{
-              fontSize: 12,
-              fontWeight: 600,
-              padding: '4px 11px',
-              borderRadius: 999,
-              background: ev.bg,
-              color: ev.fg,
-            }}
-          >
-            {c.evalStatus === 'not_evaluated' ? 'Awaiting grading' : label(c.evalStatus)}
-          </span>
+          {/* Stage first, verdict second. A call that has never been graded and
+              one whose grading run died are different situations, and the old
+              single badge said "Awaiting grading" for both. */}
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
+            <span
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                fontSize: 12,
+                fontWeight: 600,
+                padding: '4px 11px',
+                borderRadius: 999,
+                background: gt.bg,
+                color: gt.fg,
+              }}
+            >
+              {grading || data.grading?.status === 'grading' ? (
+                <span className="hue-spinner" aria-hidden="true" style={{ width: 10, height: 10, flex: '0 0 10px', borderWidth: 1.5 }} />
+              ) : null}
+              {/* A run happening in THIS tab is the most accurate thing we
+                  know — it beats a status polled a moment ago. */}
+              {grading ? `Grading ${gradedSoFar} of ${SEMANTIC_CRITERIA.length}…` : gradingLabel(data.grading)}
+            </span>
+            <span style={{ fontSize: 11, color: 'var(--ink-500)' }}>
+              {grading ? grading : gradingDetail(data.grading)}
+            </span>
+          </div>
+          {c.evalStatus !== 'not_evaluated' ? (
+            <span
+              style={{
+                fontSize: 12,
+                fontWeight: 600,
+                padding: '4px 11px',
+                borderRadius: 999,
+                background: ev.bg,
+                color: ev.fg,
+              }}
+            >
+              {label(c.evalStatus)}
+            </span>
+          ) : null}
           {/* Grading is a deliberate act, not a side effect of opening a call —
               the count and the compliance score must hold still while browsing. */}
           <button className="hue-btn"
