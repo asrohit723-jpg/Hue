@@ -234,3 +234,33 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 
 CREATE INDEX IF NOT EXISTS notifications_state_idx ON notifications (state);
+
+-- ---------------------------------------------------------------
+-- call_grades — the durable record of one call's AI grading
+--
+-- Created by `facilio vibe db import` (db/seed/call_grades.csv), not by the
+-- DDL above: the app's role cannot CREATE TABLE, but the platform's import
+-- path can. Columns are therefore inferred and every one is nullable —
+-- response_quality and schema_version came out numeric because the sentinel
+-- row held digits.
+--
+-- SINGLE SOURCE OF TRUTH for a call's grade.
+--
+--   * The call-grade write path writes THIS table and, in the same step, the
+--     denormalised conversations.quality_score. Nothing else may ever write
+--     quality_score — one number with two homes drifts the moment a second
+--     writer appears.
+--   * applicable='false' is AUTHORITATIVE. A response_quality of 0 on such a
+--     row is the absence of a score, never a score of zero, and no reader may
+--     treat it as one.
+--   * criteria_* are comma-separated criterion ids (CR-LOG-01 shaped, no
+--     embedded delimiters). criteria_unavailable keeps "the judge never
+--     answered" distinct from "the criterion passed" — the same rule that
+--     holds everywhere else in this app.
+--   * claimed_at / claimed_by exist for the multi-user nudge: a grade claims
+--     a row before starting, so two users cannot grade the same call, and a
+--     claim left behind by a dead run can be reaped by age.
+--
+-- There is no DROP and no ALTER on this path. A further column means a further
+-- table, which is why schema_version is here.
+-- ---------------------------------------------------------------

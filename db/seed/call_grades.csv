@@ -1,0 +1,2 @@
+id,conversation_id,claimed_at,claimed_by,graded_at,graded_by,applicable,response_quality,quality_justification,sentiment,sentiment_reason,sentiment_channel,sentiment_agrees,overall_assessment,criteria_satisfied,criteria_breached,criteria_graded,criteria_unavailable,agent_version,schema_version
+__seed__,__seed__,2026-01-01T00:00:00Z,job,2026-01-01T00:00:00Z,auto,false,0,seed,neutral,seed,neutral,true,seed,,,,,seed,1
