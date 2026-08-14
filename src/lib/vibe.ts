@@ -30,7 +30,12 @@ async function call<T>(fn: string, handler: string, args: Record<string, unknown
 
 export interface CurrentUser {
   user: { uid: number; email: string; name: string; username: string };
-  org: { orgId: number };
+  /**
+   * `name` is optional because the session may not carry one — the only org
+   * fact this app can rely on is the numeric id. The account's display name is
+   * NOT the org name, however much it reads like one.
+   */
+  org: { orgId: number; name?: string };
 }
 
 /**

@@ -335,6 +335,98 @@ export function Shell({ me }: { me: CurrentUser }) {
           />
 
         </div>
+
+        {/* ---- account, anchored to the bottom of the sidebar ----
+             marginTop:auto rather than a fixed offset, so it sits at the foot
+             of the rail whatever the nav above it grows to. */}
+        <div
+          style={{
+            marginTop: 'auto',
+            borderTop: '1px solid var(--border-default)',
+            padding: '12px 12px 14px',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+            <span
+              style={{
+                width: 32,
+                height: 32,
+                flex: '0 0 32px',
+                borderRadius: 999,
+                background: 'var(--blue-050)',
+                color: 'var(--blue-600)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: 12,
+                fontWeight: 600,
+              }}
+            >
+              {initials}
+            </span>
+            <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.25, minWidth: 0 }}>
+              <span
+                style={{
+                  fontWeight: 600,
+                  fontSize: 13,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+                title={me.user.name || me.user.email}
+              >
+                {me.user.name || me.user.username || me.user.email}
+              </span>
+              <span
+                style={{
+                  fontSize: 11,
+                  color: 'var(--ink-500)',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+                title={me.user.email}
+              >
+                {me.user.email}
+              </span>
+            </div>
+            <button
+              className="hue-btn"
+              onClick={logout}
+              title="Sign out"
+              aria-label="Sign out"
+              style={{
+                marginLeft: 'auto',
+                width: 30,
+                height: 30,
+                flex: '0 0 30px',
+                borderRadius: 6,
+                border: '1px solid var(--border-default)',
+                background: '#fff',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                color: 'var(--ink-600)',
+              }}
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                <polyline points="16 17 21 12 16 7" />
+                <line x1="21" y1="12" x2="9" y2="12" />
+              </svg>
+            </button>
+          </div>
+
+          {/* The org as the session actually reports it. "Ocean's 3" above is
+              the ACCOUNT's display name — the CMMS records it as the user on
+              every request this account creates — so naming it the org here
+              would be putting a label on the wrong fact. If the session ever
+              carries a real org name, this shows it instead of the id. */}
+          <div style={{ fontSize: 11, color: 'var(--ink-500)', marginTop: 9, paddingLeft: 2 }}>
+            {me.org.name || `Org ${me.org.orgId}`}
+          </div>
+        </div>
       </div>
 
       {/* ---------------- MAIN ---------------- */}
@@ -352,43 +444,7 @@ export function Shell({ me }: { me: CurrentUser }) {
             padding: '0 24px',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 0 }}>
-            <span
-              style={{
-                width: 28,
-                height: 28,
-                flex: '0 0 28px',
-                borderRadius: 6,
-                background: 'var(--brand-indigo-050)',
-                color: 'var(--brand-indigo)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: 12,
-                fontWeight: 700,
-              }}
-            >
-              {initials}
-            </span>
-            <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.2, minWidth: 0 }}>
-              <span
-                style={{
-                  fontWeight: 600,
-                  fontSize: 14,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {me.user.name || me.user.email}
-              </span>
-              <span style={{ fontSize: 11, color: 'var(--ink-500)', whiteSpace: 'nowrap' }}>
-                org {me.org.orgId}
-              </span>
-            </div>
-          </div>
-
-          <div style={{ flex: 1, maxWidth: 460, position: 'relative', marginLeft: 8 }}>
+          <div style={{ flex: 1, maxWidth: 520, position: 'relative' }}>
             <svg
               style={{ position: 'absolute', left: 12, top: 11 }}
               width="16"
@@ -471,52 +527,6 @@ export function Shell({ me }: { me: CurrentUser }) {
                 </svg>
               )}
               {refreshing ? 'Refreshing…' : 'Refresh'}
-            </button>
-            <span style={{ width: 1, height: 24, background: 'var(--border-default)' }} />
-            <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-              <span
-                style={{
-                  width: 30,
-                  height: 30,
-                  borderRadius: 999,
-                  background: 'var(--blue-050)',
-                  color: 'var(--blue-600)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontSize: 12,
-                  fontWeight: 600,
-                }}
-              >
-                {initials}
-              </span>
-              <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.2 }}>
-                <span style={{ fontSize: 13, fontWeight: 500 }}>{me.user.name || me.user.username}</span>
-                <span style={{ fontSize: 11, color: 'var(--ink-500)' }}>{me.user.email}</span>
-              </div>
-            </div>
-            <button className="hue-btn"
-              onClick={logout}
-              title="Sign out"
-              aria-label="Sign out"
-              style={{
-                width: 36,
-                height: 36,
-                borderRadius: 6,
-                border: '1px solid var(--border-default)',
-                background: '#fff',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                cursor: 'pointer',
-                color: 'var(--ink-600)',
-              }}
-            >
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-                <polyline points="16 17 21 12 16 7" />
-                <line x1="21" y1="12" x2="9" y2="12" />
-              </svg>
             </button>
           </div>
         </div>
