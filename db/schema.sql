@@ -308,3 +308,38 @@ CREATE INDEX IF NOT EXISTS notifications_state_idx ON notifications (state);
 --     this channel — 'phone', 'email' or 'handle'. The upstream field is
 --     polymorphic and the column name is a historical accident.
 -- ---------------------------------------------------------------
+
+-- ---------------------------------------------------------------
+-- sow_documents / generated_evals — the scope of work, and the evals
+-- written from it
+--
+-- Both created by `facilio vibe db import` (db/seed/*.csv), like call_grades:
+-- no CREATE TABLE grant, so all columns are text/numeric and nullable and the
+-- invariants below hold by construction rather than by constraint.
+--
+-- sow_documents
+--   * SINGLE WRITER: writeSowDocument.
+--   * A SOW is versioned BY ITS OWN CONTENT: id = 'SOW-' || fingerprint, so
+--     saving identical text twice is a no-op, and changed text supersedes the
+--     current version instead of overwriting it. Old versions are kept because
+--     a grade produced last week was produced against last week's scope, and
+--     losing it makes an old finding unauditable.
+--   * `source` is the seam: 'manual' today, 'agent_prompt' the day agent 6208
+--     becomes readable (docs/platform-ask-agent-scope.md). Only
+--     fetchSowFromAgent changes.
+--
+-- generated_evals
+--   * SINGLE WRITER: the saveGeneratedEvals handler, which re-validates every
+--     row — the browser proposes criteria, the server decides what may grade.
+--   * criterion_id is namespaced GEN-*, so a generated criterion can never
+--     collide with a hand-written CR-* and quietly take over its check.
+--   * Three gates before an eval grades anything: it belongs to the CURRENT
+--     sow_fingerprint, it is active, and it is approved. A regeneration that
+--     drops a criterion sets active='false' rather than deleting it.
+--   * layer='deterministic' means NOTHING RUNS IT. Generated criteria have no
+--     code behind them; only semantic ones reach a judge. Such a row is
+--     reported as needing code and must never be read as a criterion a call
+--     passed — the same never-fake-a-pass rule as everywhere else.
+--   * source_excerpt is the SOW sentence the criterion came from, verbatim, so
+--     every criterion is auditable back to the text that produced it.
+-- ---------------------------------------------------------------

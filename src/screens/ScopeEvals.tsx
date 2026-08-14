@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import seed from '../../evals/criteria.seed.json';
 import { api, type DeviationWithEvidence } from '../lib/vibe';
+import { generateEvals } from '../lib/judges';
 import { BootSkeleton } from './BootSkeleton';
 import { WIRED_CRITERIA } from '../lib/criteria';
 import { page } from '../lib/layout';
@@ -100,6 +101,13 @@ export function ScopeEvals() {
   const [openEval, setOpenEval] = useState<SeedCriterion | null>(null);
   const [creating, setCreating] = useState(false);
 
+  // The real scope of work, and the evals written from it. Pasted for now; the
+  // fetch from agent 6208 is one function away — see fetchSowFromAgent.
+  const [sow, setSow] = useState<Awaited<ReturnType<typeof api.currentSow>> | null>(null);
+  const [sowBusy, setSowBusy] = useState<string | null>(null);
+  const [sowNote, setSowNote] = useState<string | null>(null);
+  const [sowError, setSowError] = useState<string | null>(null);
+
   const [deviations, setDeviations] = useState<DeviationWithEvidence[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [evaluatedCalls, setEvaluatedCalls] = useState<number | null>(null);
@@ -108,13 +116,18 @@ export function ScopeEvals() {
     let cancelled = false;
     (async () => {
       try {
-        const [devs, convos] = await Promise.all([
+        const [devs, convos, current] = await Promise.all([
           api.listDeviations(''),
           api.listConversations(200),
+          api.currentSow().catch(() => null),
         ]);
         if (cancelled) return;
         setDeviations(devs);
         setEvaluatedCalls(convos.filter((c) => c.evalStatus !== 'not_evaluated').length);
+        if (current) {
+          setSow(current);
+          setDraft(current.sow?.body ?? '');
+        }
       } catch (err) {
         // The criteria themselves are bundled configuration and still render,
         // so this is a partial failure, not a dead screen: the pass-rate column
@@ -131,6 +144,65 @@ export function ScopeEvals() {
       cancelled = true;
     };
   }, []);
+
+
+  /**
+   * Save the pasted scope of work, then write evals from it when it is new.
+   *
+   * Saving and generating are one action on purpose: a stored SOW with no
+   * criteria grades nothing, and leaving that state reachable by a misclick is
+   * how a screen ends up quietly measuring against an empty list.
+   */
+  async function saveAndGenerate(force = false) {
+    setSowError(null);
+    setSowNote(null);
+    try {
+      setSowBusy('Saving the scope of work…');
+      const saved = await api.saveSow({
+        body: draft,
+        title: sow?.sow?.title || 'Scope of work',
+        savedBy: 'this session',
+      });
+
+      // Unchanged text with criteria already written is a no-op, not a reason
+      // to spend a model call rewriting the same list.
+      if (!saved.changed && !saved.needsGeneration && !force) {
+        setSowBusy(null);
+        setSowNote('Unchanged — the saved evals already match this scope of work.');
+        return;
+      }
+
+      setSowBusy(
+        saved.changed
+          ? 'The scope of work changed — rewriting the evals…'
+          : 'Writing evals from the scope of work…',
+      );
+      const res = await generateEvals({
+        fingerprint: saved.fingerprint,
+        title: sow?.sow?.title || 'Scope of work',
+        body: draft,
+      });
+
+      const parts = [`${res.saved} evals saved`];
+      if (res.retired) parts.push(`${res.retired} retired`);
+      // Never silent. A criterion the server refused is one this screen would
+      // otherwise imply is grading calls.
+      if (res.rejected.length) parts.push(`${res.rejected.length} rejected`);
+      setSowNote(parts.join(' · '));
+
+      const current = await api.currentSow();
+      setSow(current);
+      setDraft(current.sow?.body ?? draft);
+    } catch (err) {
+      setSowError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSowBusy(null);
+    }
+  }
+
+  const sowDirty = Boolean(draft.trim()) && draft.trim() !== (sow?.sow?.body ?? '').trim();
+  const generated = sow?.evals ?? [];
+  const runnableCount = generated.filter((e) => e.active && e.runnable).length;
 
   /** Failures per criterion, from the findings actually recorded. */
   const failures = useMemo(() => {
@@ -344,7 +416,9 @@ export function ScopeEvals() {
             <button className="hue-btn"
               onClick={() => {
                 setEditingDoc(true);
-                setDraft('');
+                // Opens on what is stored, so editing is editing rather than
+                // retyping — and so the diff that drives regeneration is real.
+                setDraft(sow?.sow?.body ?? '');
               }}
               style={{
                 height: 34,
@@ -390,21 +464,32 @@ export function ScopeEvals() {
             />
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14, flexWrap: 'wrap' }}>
               <button className="hue-btn"
-                disabled
-                title="There is nowhere to store the document yet"
+                onClick={() => saveAndGenerate()}
+                disabled={Boolean(sowBusy) || draft.trim().length < 40}
+                aria-busy={Boolean(sowBusy)}
+                title={
+                  draft.trim().length < 40
+                    ? 'Paste the scope of work first'
+                    : 'Store this scope of work and write evals from it'
+                }
                 style={{
                   height: 36,
                   padding: '0 16px',
                   borderRadius: 4,
-                  border: '1px solid var(--border-default)',
-                  background: 'var(--ink-100)',
-                  color: 'var(--ink-400)',
+                  border: `1px solid ${sowBusy || draft.trim().length < 40 ? 'var(--border-default)' : 'var(--blue-500)'}`,
+                  background:
+                    sowBusy || draft.trim().length < 40 ? 'var(--ink-100)' : 'var(--blue-500)',
+                  color: sowBusy || draft.trim().length < 40 ? 'var(--ink-400)' : '#fff',
                   fontWeight: 500,
                   fontSize: 13,
-                  cursor: 'not-allowed',
+                  cursor: sowBusy ? 'progress' : draft.trim().length < 40 ? 'not-allowed' : 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 8,
                 }}
               >
-                Save
+                {sowBusy ? <span className="hue-spinner" aria-hidden="true" /> : null}
+                {sowBusy ? 'Working…' : sowDirty ? 'Save and write evals' : 'Save'}
               </button>
               <button className="hue-btn"
                 onClick={() => {
@@ -425,9 +510,13 @@ export function ScopeEvals() {
                 Cancel
               </button>
               <span style={{ fontSize: 12, color: 'var(--ink-500)' }}>
-                {draft.trim() ? draft.trim().split(/\s+/).length : 0} words · saving needs a table
-                Hue cannot create yet
+                {draft.trim() ? draft.trim().split(/\s+/).length : 0} words
+                {sowBusy ? ` · ${sowBusy}` : ''}
+                {!sowBusy && sowNote ? ` · ${sowNote}` : ''}
               </span>
+              {sowError ? (
+                <span style={{ fontSize: 12, color: 'var(--danger-700)' }}>{sowError}</span>
+              ) : null}
             </div>
           </div>
         ) : (
@@ -448,17 +537,57 @@ export function ScopeEvals() {
                 textWrap: 'pretty',
               }}
             >
-              <p style={{ margin: 0 }}>
-                No scope-of-work document is stored in Hue. The {criteria.length} evals below were
-                derived from one and are what every call is actually graded against — but the source
-                text itself was never kept, so there is nothing to show here or to diff a new version
-                against.
-              </p>
-              <p style={{ margin: '12px 0 0' }}>
-                Paste the contract with <b style={{ color: 'var(--ink-900)', fontWeight: 500 }}>Edit
-                document</b> to see it here. Storing it needs a table the app's database role cannot
-                create today, so the editor will not save until that is granted.
-              </p>
+              {sow?.sow ? (
+                <>
+                  {/* The stored text, verbatim. This is what the evals below
+                      were written from and what a new paste is diffed against. */}
+                  <pre
+                    style={{
+                      margin: 0,
+                      whiteSpace: 'pre-wrap',
+                      fontFamily: 'var(--font-sans)',
+                      fontSize: 14,
+                      lineHeight: '24px',
+                      color: 'var(--ink-900)',
+                    }}
+                  >
+                    {sow.sow.body}
+                  </pre>
+                  <p style={{ margin: '14px 0 0', fontSize: 12, color: 'var(--ink-500)' }}>
+                    {sow.sow.source === 'manual' ? 'Pasted' : `Fetched from ${sow.sow.sourceRef}`} ·{' '}
+                    {generated.filter((e) => e.active).length} evals written from it,{' '}
+                    {runnableCount} of them gradeable
+                    {generated.filter((e) => e.active && !e.runnable).length
+                      ? ` · ${generated.filter((e) => e.active && !e.runnable).length} need code and are not graded`
+                      : ''}
+                  </p>
+                  {/* The seam, stated rather than hidden. */}
+                  {!sow.upstreamReadable ? (
+                    <p style={{ margin: '10px 0 0', fontSize: 12, color: 'var(--ink-500)' }}>
+                      The helpdesk agent's own prompt is not readable through any connection yet, so
+                      this is pasted rather than pulled. See docs/platform-ask-agent-scope.md.
+                    </p>
+                  ) : null}
+                  {sow.upstreamDrifted ? (
+                    <p style={{ margin: '10px 0 0', fontSize: 12, color: 'var(--warning-700)' }}>
+                      The agent's configured scope has changed upstream. Re-save to rewrite the evals.
+                    </p>
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  <p style={{ margin: 0 }}>
+                    No scope of work is stored yet. The {criteria.length} seeded evals below still
+                    grade every call — they ship with the app — but nothing here was written from
+                    your actual contract.
+                  </p>
+                  <p style={{ margin: '12px 0 0' }}>
+                    Paste it with <b style={{ color: 'var(--ink-900)', fontWeight: 500 }}>Edit
+                    document</b>. Hue stores it, writes evals from it, and grades every conversation
+                    against those alongside the seeded ones.
+                  </p>
+                </>
+              )}
             </div>
             <div style={{ borderLeft: '1px solid var(--ink-100)', paddingLeft: 20 }}>
               <div style={microLabel}>Version history</div>
@@ -512,6 +641,115 @@ export function ScopeEvals() {
         )}
       </div>
 
+
+      {/* ---- evals written from the scope of work ---- */}
+      {generated.filter((e) => e.active).length ? (
+        <div
+          style={{
+            background: '#fff',
+            border: '1px solid var(--border-default)',
+            borderRadius: 8,
+            marginTop: 16,
+            overflow: 'hidden',
+          }}
+        >
+          <div
+            style={{
+              padding: '14px 20px',
+              borderBottom: '1px solid var(--border-default)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              flexWrap: 'wrap',
+            }}
+          >
+            <h3 style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>From your scope of work</h3>
+            <span style={{ fontSize: 12, color: 'var(--ink-500)' }}>
+              written by {generated[0]?.generatedBy || 'the eval writer'} · saved, and re-read on
+              every load
+            </span>
+          </div>
+
+          {generated
+            .filter((e) => e.active)
+            .map((e) => (
+              <div
+                key={e.id}
+                style={{
+                  padding: '12px 20px',
+                  borderBottom: '1px solid var(--ink-100)',
+                  display: 'flex',
+                  gap: 12,
+                  alignItems: 'flex-start',
+                }}
+              >
+                <span
+                  style={{
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 11,
+                    color: 'var(--ink-500)',
+                    flex: '0 0 118px',
+                    paddingTop: 2,
+                  }}
+                >
+                  {e.criterionId}
+                </span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 500 }}>{e.title}</div>
+                  <div style={{ fontSize: 12, color: 'var(--ink-600)', marginTop: 3, lineHeight: '18px' }}>
+                    <b style={{ fontWeight: 600, color: 'var(--success-700)' }}>Passes</b>{' '}
+                    {e.passDefinition}
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--ink-600)', marginTop: 2, lineHeight: '18px' }}>
+                    <b style={{ fontWeight: 600, color: 'var(--danger-700)' }}>Fails</b>{' '}
+                    {e.failDefinition}
+                  </div>
+                  {/* Quoted from the SOW, so every criterion can be traced back
+                      to the sentence that produced it. */}
+                  {e.sourceExcerpt ? (
+                    <div
+                      style={{
+                        fontSize: 11,
+                        color: 'var(--ink-500)',
+                        marginTop: 6,
+                        paddingLeft: 9,
+                        borderLeft: '2px solid var(--ink-100)',
+                        lineHeight: '17px',
+                      }}
+                    >
+                      {e.sourceExcerpt}
+                    </div>
+                  ) : null}
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+                  <span style={{ fontSize: 11, color: 'var(--ink-500)' }}>
+                    {e.clauseRef} · {e.severity}
+                    {e.modality !== 'any' ? ` · ${e.modality} only` : ''}
+                  </span>
+                  {/* A criterion the writer called deterministic has no code
+                      behind it. Saying so is the whole point — it is not graded,
+                      and it must never read as one a call passed. */}
+                  <span
+                    style={{
+                      fontSize: 10,
+                      fontWeight: 600,
+                      letterSpacing: '.03em',
+                      textTransform: 'uppercase',
+                      padding: '1px 7px',
+                      borderRadius: 4,
+                      background: e.runnable ? 'var(--success-050)' : 'var(--ink-050)',
+                      color: e.runnable ? 'var(--success-700)' : 'var(--ink-600)',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {e.runnable ? 'Graded' : 'Needs code'}
+                  </span>
+                </div>
+              </div>
+            ))}
+        </div>
+      ) : null}
+
       {/* ---- eval set ---- */}
       <div
         style={{
@@ -544,7 +782,9 @@ export function ScopeEvals() {
             <div>
               <h3 style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>Evals</h3>
               <div style={{ fontSize: 12, color: 'var(--ink-500)', marginTop: 2 }}>
-                AI-drafted from your SOW · {wired} wired to a check, {criteria.length - wired} not yet
+                {generated.filter((e) => e.active).length
+                  ? `${runnableCount} written from your scope of work · ${wired} seeded and wired`
+                  : `Seeded · ${wired} wired to a check, ${criteria.length - wired} not yet`}
               </div>
             </div>
           </div>

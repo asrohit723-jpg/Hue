@@ -1,0 +1,99 @@
+{
+  "title": "HueEvalWriter",
+  "type": "object",
+  "required": [
+    "criteria"
+  ],
+  "properties": {
+    "criteria": {
+      "type": "array",
+      "description": "One entry per testable rule found in the scope of work. Omit rules that cannot be tested from a conversation transcript and a CMMS record.",
+      "items": {
+        "type": "object",
+        "required": [
+          "criterionId",
+          "clauseRef",
+          "title",
+          "description",
+          "passDefinition",
+          "failDefinition",
+          "layer",
+          "checkType",
+          "severity",
+          "modality",
+          "sourceExcerpt"
+        ],
+        "properties": {
+          "criterionId": {
+            "type": "string",
+            "description": "Short stable id in the form GEN-<AREA>-<NN>, uppercase, e.g. GEN-LOG-01. Derive AREA from the subject of the rule."
+          },
+          "clauseRef": {
+            "type": "string",
+            "description": "The clause number as written in the scope of work, e.g. S-2.1. Use the document's own numbering; never invent one."
+          },
+          "title": {
+            "type": "string",
+            "description": "Short name for the check, under 80 characters."
+          },
+          "description": {
+            "type": "string",
+            "description": "What this criterion requires, in one or two sentences."
+          },
+          "passDefinition": {
+            "type": "string",
+            "description": "Exactly what must be observable in the transcript or the CMMS record for this to PASS. Written so two people reading it would reach the same verdict."
+          },
+          "failDefinition": {
+            "type": "string",
+            "description": "Exactly what makes this FAIL. Must be the complement of passDefinition, not a restatement of it."
+          },
+          "layer": {
+            "type": "string",
+            "enum": [
+              "deterministic",
+              "semantic"
+            ],
+            "description": "deterministic = answerable by comparing stored fields with no judgement. semantic = requires reading the conversation. Choose semantic unless the check is a pure field comparison."
+          },
+          "checkType": {
+            "type": "string",
+            "enum": [
+              "intended_action",
+              "required_field",
+              "entity_resolution",
+              "escalation_sla",
+              "scope_boundary",
+              "flow_conformance",
+              "communication_fidelity",
+              "custom"
+            ]
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "critical",
+              "high",
+              "medium",
+              "low"
+            ],
+            "description": "How serious a breach is for the caller. critical = the caller is left believing something happened that did not."
+          },
+          "modality": {
+            "type": "string",
+            "enum": [
+              "voice",
+              "text",
+              "any"
+            ],
+            "description": "voice = only meaningful on a spoken call (interruption, dead air, reading a number aloud). text = only meaningful in writing. any = both."
+          },
+          "sourceExcerpt": {
+            "type": "string",
+            "description": "The sentence or clause from the scope of work this criterion came from, quoted verbatim. Never paraphrase here."
+          }
+        }
+      }
+    }
+  }
+}

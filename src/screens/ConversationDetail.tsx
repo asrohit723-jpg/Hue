@@ -238,6 +238,9 @@ export function ConversationDetail({
   // How many criteria this run has attempted. Real, because the loop below
   // walks a known list — not a guess at how far a server-side pass has got.
   const [gradedSoFar, setGradedSoFar] = useState(0);
+  // How many criteria this run will attempt — the seeded set plus whatever the
+  // scope of work produced, so the progress count is real rather than assumed.
+  const [gradeTotal, setGradeTotal] = useState<number>(SEMANTIC_CRITERIA.length);
   const [gradeSummary, setGradeSummary] = useState<string | null>(null);
   const [analysis, setAnalysis] = useState<CallAnalysis | null>(null);
   const [analysisChannelSentiment, setAnalysisChannelSentiment] = useState<string | null>(null);
@@ -318,8 +321,24 @@ export function ConversationDetail({
   async function runEvals() {
     setGradeSummary(null);
     try {
+      // The criteria come from the SERVER now: the seeded CR-* set plus every
+      // active eval written from the scope of work. A criterion added to the
+      // SOW therefore starts grading calls without a line changing here.
+      //
+      // It falls back to the seeded list if that read fails — a grading run
+      // that silently checks nothing would be worse than one that checks the
+      // set this app has always checked.
+      let toGrade: string[] = [...SEMANTIC_CRITERIA];
+      try {
+        const set = await api.gradingCriteria();
+        if (set.items.length) toGrade = set.items.map((c) => c.id);
+      } catch {
+        // Keep the seeded list.
+      }
+
+      setGradeTotal(toGrade.length);
       const runs = [];
-      for (const criterionId of SEMANTIC_CRITERIA) {
+      for (const criterionId of toGrade) {
         setGrading(criterionId);
         setGradedSoFar(runs.length + 1);
         runs.push(await runSemanticCriterion(id, criterionId));
@@ -556,7 +575,7 @@ export function ConversationDetail({
               {/* A run happening in THIS tab is the most accurate thing we
                   know — it beats a status polled a moment ago. */}
               {grading
-                ? `Grading ${gradedSoFar} of ${SEMANTIC_CRITERIA.length}…`
+                ? `Grading ${gradedSoFar} of ${gradeTotal}…`
                 : gradingLabel(data.grading)}
             </span>
             {c.evalStatus !== 'not_evaluated' ? (

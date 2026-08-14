@@ -532,6 +532,61 @@ export const api = {
       elapsedSeconds: number;
     }>('governance', 'nudgeGrading'),
 
+  /**
+   * The scope of work in force, and the evals generated from it.
+   *
+   * `upstreamReadable` reports whether the helpdesk agent's own prompt can be
+   * fetched yet. It cannot — see docs/platform-ask-agent-scope.md — which is a
+   * state this screen is designed to sit in, not an error.
+   */
+  currentSow: () =>
+    call<{
+      sow: {
+        id: string; fingerprint: string; title: string; body: string;
+        source: string; sourceRef: string; fetchedAt: string; savedBy: string;
+      } | null;
+      evals: Array<{
+        id: string; criterionId: string; clauseRef: string; title: string;
+        description: string; passDefinition: string; failDefinition: string;
+        layer: string; checkType: string; severity: string; modality: string;
+        active: boolean; approved: boolean; generatedAt: string;
+        generatedBy: string; sourceExcerpt: string;
+        /** Only semantic evals can actually be judged. */
+        runnable: boolean;
+      }>;
+      upstreamReadable: boolean;
+      upstreamDrifted: boolean;
+    }>('governance', 'currentSow'),
+
+  /** Store the scope of work, and learn whether it CHANGED. */
+  saveSow: (a: { body: string; title: string; savedBy: string }) =>
+    call<{
+      id: string; fingerprint: string; changed: boolean;
+      evalCount: number; needsGeneration: boolean;
+    }>('governance', 'saveSow', a),
+
+  /** Persist the criteria the eval writer produced. Server re-validates each. */
+  saveGeneratedEvals: (a: { sowFingerprint: string; evalsJson: string; generatedBy: string }) =>
+    call<{
+      saved: number; criteria: string[];
+      rejected: Array<{ criterionId: string; why: string }>;
+      retired: number; sowFingerprint: string;
+    }>('governance', 'saveGeneratedEvals', a),
+
+  /**
+   * Every semantic criterion a conversation should be graded against — the
+   * seeded set plus the active generated evals. The browser walks this, so a
+   * criterion added to the SOW starts grading with no code change.
+   */
+  gradingCriteria: () =>
+    call<{
+      sowFingerprint: string;
+      seeded: Array<{ id: string; clauseRef: string; requires: string }>;
+      generated: Array<{ id: string; clauseRef: string; title: string; requires: string; severity: string; modality: string }>;
+      notRunnable: string[];
+      items: Array<{ id: string; clauseRef: string; requires: string }>;
+    }>('governance', 'gradingCriteria'),
+
   /** Transcript + CMMS record + active criteria, for the call analyst. */
   callAnalysisContext: (conversationId: string) =>
     call<{

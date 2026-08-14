@@ -1,0 +1,2 @@
+id,sow_id,sow_fingerprint,criterion_id,clause_ref,title,description,pass_definition,fail_definition,layer,check_type,severity,modality,active,approved,approved_by,generated_at,generated_by,source_excerpt,schema_version
+__seed__,__seed__,seedfp0000,GEN-SEED-00,S-0.0,seed,seed,seed,seed,semantic,custom,low,any,false,false,seed,2026-01-01T00:00:00Z,seed,seed,1

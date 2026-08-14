@@ -349,6 +349,212 @@ function readGrade(row: any) {
 }
 
 // ---------------------------------------------------------------------------
+// The scope of work, and the evals generated from it
+//
+// Hue grades against a SOW. Until now that SOW existed only as a seeded list of
+// criteria in the bundle — written by hand, agreeing with the real scope of
+// work by luck rather than by construction.
+//
+// THE SOURCE IS DELIBERATELY PLUGGABLE. The real SOW lives in the helpdesk
+// voice agent's own configuration (agent 6208), and this app cannot read it:
+// `helpdesk-agent-tools` exposes exactly one action, `get-call-tool-calls`, and
+// `facilio-ai-studio.agent-list` returns only "agents your team has created",
+// which does not include 6208. See docs/platform-ask-agent-scope.md.
+//
+// So the SOW is pasted for now and fetched later. `fetchSowFromAgent` below is
+// the single seam: when the platform exposes that prompt, it stops returning
+// null and every other line in this pipeline stays exactly as it is.
+// ---------------------------------------------------------------------------
+
+/**
+ * A stable fingerprint of the SOW text, for drift detection.
+ *
+ * FNV-1a, not a cryptographic hash: this answers "is this the same text as
+ * last time", never "prove this text was not tampered with". The sandbox has
+ * no crypto module and a collision here costs a missed regeneration, not a
+ * wrong grade.
+ *
+ * Whitespace is normalised first, so re-pasting the same SOW with a different
+ * trailing newline is not treated as a new version.
+ */
+function fingerprintOf(text: string): string {
+  const norm = String(text ?? '').replace(/\r\n/g, '\n').replace(/[ \t]+$/gm, '').trim();
+  let h = 0x811c9dc5;
+  for (let i = 0; i < norm.length; i++) {
+    h ^= norm.charCodeAt(i);
+    // FNV prime, applied with shifts to stay inside 32 bits without Math.imul.
+    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+  }
+  // Length is mixed in so two texts that hash alike must also match in size.
+  return `fp${h.toString(16).padStart(8, '0')}${norm.length.toString(36)}`;
+}
+
+/**
+ * Read the SOW from the helpdesk agent's own configuration. NOT WIRED YET.
+ *
+ * This is the ONE function that becomes real when the platform exposes agent
+ * 6208's prompt. Everything downstream — storage, fingerprinting, drift
+ * detection, generation, grading — is already written against whatever this
+ * returns, so wiring it is a body swap and nothing else.
+ *
+ * Verified unavailable on 14 Aug 2026, by execution rather than assumption:
+ *
+ *   helpdesk-agent-tools.get-agent-details   -> Unknown action_slug
+ *   facilio-ai-studio.v2-get-agent {id:6208} -> {"error":"Agent not found"}
+ *   facilio-ai-studio.v2-get-agent {id:6404} -> full config, 1846-char prompt
+ *   facilio-ai-studio.agent-list             -> "agents your team has created"
+ *
+ * The last two are the control: the action works and returns exactly the shape
+ * this app wants (`agent.roleDescription` plus `agent.restrictions`); it is the
+ * agent that is invisible, not the capability that is missing.
+ *
+ * It returns null rather than throwing: a missing upstream SOW is a state this
+ * app is designed to sit in, not a failure to report.
+ */
+async function fetchSowFromAgent(): Promise<{ title: string; body: string } | null> {
+  return null;
+}
+
+/** Booleans are text in every table here. */
+const isTrue = (v: unknown) => v === true || v === 'true';
+
+/**
+ * THE ONLY WRITER of sow_documents.
+ *
+ * A SOW is versioned by its own content: the id is derived from the
+ * fingerprint, so saving identical text twice is a no-op rather than a second
+ * version, and pasting changed text supersedes the current one instead of
+ * overwriting it. History is kept because a grade produced last week was
+ * produced against last week's scope, and losing that makes an old finding
+ * unauditable.
+ */
+function writeSowDocument(
+  db: any,
+  d: { title: string; body: string; source: string; sourceRef: string; savedBy: string },
+): { id: string; fingerprint: string; changed: boolean } {
+  const fingerprint = fingerprintOf(d.body);
+  const id = `SOW-${fingerprint}`;
+  const now = nowIso();
+
+  const existing = db.query('select id from sow_documents where id = $1 limit 1', [id]).rows[0];
+  const current = db.query(
+    `select id, fingerprint from sow_documents
+      where id <> '__seed__' and is_current = 'true' limit 1`,
+  ).rows[0];
+
+  // Identical text, already current: nothing to do and nothing to regenerate.
+  if (current && String(current.fingerprint) === fingerprint) {
+    return { id, fingerprint, changed: false };
+  }
+
+  if (current) {
+    db.query(
+      `update sow_documents set is_current = 'false', superseded_at = $2 where id = $1`,
+      [current.id, now],
+    );
+  }
+
+  if (existing) {
+    // A SOW being reinstated — the same text as an older version. Make it
+    // current again rather than writing a duplicate row.
+    db.query(
+      `update sow_documents set is_current = 'true', superseded_at = '', fetched_at = $2,
+         source = $3, source_ref = $4, saved_by = $5, title = $6
+       where id = $1`,
+      [id, now, d.source, d.sourceRef, d.savedBy, d.title],
+    );
+  } else {
+    db.query(
+      `insert into sow_documents
+         (id, fingerprint, source, source_ref, title, body, body_format,
+          is_current, fetched_at, superseded_at, saved_by, schema_version)
+       values ($1,$2,$3,$4,$5,$6,'plain','true',$7,'',$8,1)`,
+      [id, fingerprint, d.source, d.sourceRef, d.title, d.body, now, d.savedBy],
+    );
+  }
+
+  return { id, fingerprint, changed: true };
+}
+
+/** The SOW currently in force, or null before anything has been saved. */
+function currentSowRow(db: any) {
+  return db.query(
+    `select * from sow_documents where id <> '__seed__' and is_current = 'true' limit 1`,
+  ).rows[0];
+}
+
+/**
+ * Generated criteria the grading pipeline may actually use.
+ *
+ * Three gates, all of which must hold: the eval belongs to the CURRENT SOW,
+ * it is active, and it is approved. An eval generated from a superseded SOW is
+ * kept — it is what an old grade was measured against — but it never grades a
+ * new conversation.
+ */
+function activeGeneratedEvals(db: any, fingerprint: string): any[] {
+  if (!fingerprint) return [];
+  return db.query(
+    `select * from generated_evals
+      where id <> '__seed__' and sow_fingerprint = $1
+        and active = 'true' and approved = 'true'
+      order by clause_ref, criterion_id`,
+    [fingerprint],
+  ).rows;
+}
+
+/**
+ * One generated eval, in the shape the rest of the app already speaks.
+ *
+ * `requires` is what the conformance judge reads, and it is assembled from the
+ * pass and fail definitions rather than the description: a judge told only what
+ * a criterion is about will invent its own bar. Told what passing and failing
+ * look like, it has one.
+ */
+/**
+ * One generated criterion by id, in the same shape `SEMANTIC_CRITERIA` uses.
+ *
+ * Only ACTIVE, APPROVED, SEMANTIC evals of the CURRENT SOW resolve. A verdict
+ * on anything else must not be accepted: a retired criterion, one belonging to
+ * a superseded scope, or one with no implementation behind it would each write
+ * a finding nothing is really grading.
+ */
+function generatedCriterion(db: any, criterionId: string) {
+  if (!criterionId.startsWith('GEN-')) return null;
+  const sow = currentSowRow(db);
+  if (!sow) return null;
+
+  const row = db.query(
+    `select * from generated_evals
+      where id <> '__seed__' and criterion_id = $1 and sow_fingerprint = $2
+        and active = 'true' and approved = 'true' and layer = 'semantic'
+      limit 1`,
+    [criterionId, String(sow.fingerprint ?? '')],
+  ).rows[0];
+  if (!row) return null;
+
+  const c = toJudgeCriterion(row);
+  return { clauseRef: c.clauseRef, requires: c.requires };
+}
+
+function toJudgeCriterion(row: any) {
+  const pass = String(row.pass_definition ?? '').trim();
+  const fail = String(row.fail_definition ?? '').trim();
+  return {
+    id: String(row.criterion_id ?? ''),
+    clauseRef: String(row.clause_ref ?? ''),
+    title: String(row.title ?? ''),
+    requires:
+      `${String(row.description ?? '').trim()}\n\n` +
+      `PASSES when: ${pass || 'not stated'}\n` +
+      `FAILS when: ${fail || 'not stated'}`,
+    layer: String(row.layer ?? 'semantic'),
+    severity: String(row.severity ?? 'medium'),
+    modality: String(row.modality ?? 'any'),
+    generated: true,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Channel
 //
 // A conversation is not always a phone call. The connection reports PHONE and
@@ -1730,6 +1936,296 @@ server.addHandler({
 });
 
 server.addHandler({
+  name: 'saveSow',
+  description:
+    'Store the scope of work Hue grades against, and report whether it CHANGED. Pasted for now; the same handler serves an automatic fetch the day agent 6208 becomes readable.',
+  parameters: {
+    body: { description: 'The SOW text', type: 'string' },
+    title: { description: 'What to call this scope of work', type: 'string' },
+    savedBy: { description: 'Who saved it', type: 'string' },
+  },
+  execute: async (args) => {
+    const body = String(args.body ?? '').trim();
+    // A SOW too short to contain a rule is refused rather than stored: it would
+    // generate criteria out of nothing, and those criteria would grade calls.
+    if (body.length < 40) {
+      throw new Error(
+        `Rejected: a scope of work needs enough text to contain a rule — got ${body.length} characters.`,
+      );
+    }
+
+    const db = connect();
+    const res = writeSowDocument(db, {
+      title: String(args.title ?? '').trim() || 'Scope of work',
+      body,
+      source: 'manual',
+      sourceRef: 'pasted',
+      savedBy: String(args.savedBy ?? '').trim() || 'unknown',
+    });
+
+    // How many evals already exist for this exact text. Zero against a changed
+    // SOW is the browser's cue to regenerate.
+    const evalCount = Number(
+      db.query(
+        `select count(*) as n from generated_evals
+          where id <> '__seed__' and sow_fingerprint = $1 and active = 'true'`,
+        [res.fingerprint],
+      ).rows[0]?.n ?? 0,
+    );
+
+    return { ...res, evalCount, needsGeneration: evalCount === 0 };
+  },
+});
+
+server.addHandler({
+  name: 'currentSow',
+  description:
+    'The scope of work in force, its fingerprint, and the evals generated from it. Also reports whether the upstream agent prompt is readable yet — it is not, and that is a state, not an error.',
+  parameters: {},
+  execute: async () => {
+    const db = connect();
+    const row = currentSowRow(db);
+
+    // The seam. Returns null today; when it stops doing so, a drifted upstream
+    // SOW is detected here rather than waiting for someone to paste it again.
+    const upstream = await fetchSowFromAgent();
+    const upstreamFingerprint = upstream ? fingerprintOf(upstream.body) : '';
+
+    const fingerprint = row ? String(row.fingerprint ?? '') : '';
+    const evals = fingerprint
+      ? db.query(
+          `select * from generated_evals
+            where id <> '__seed__' and sow_fingerprint = $1
+            order by clause_ref, criterion_id`,
+          [fingerprint],
+        ).rows
+      : [];
+
+    return {
+      sow: row
+        ? {
+            id: String(row.id),
+            fingerprint,
+            title: String(row.title ?? ''),
+            body: String(row.body ?? ''),
+            source: String(row.source ?? ''),
+            sourceRef: String(row.source_ref ?? ''),
+            fetchedAt: String(row.fetched_at ?? ''),
+            savedBy: String(row.saved_by ?? ''),
+          }
+        : null,
+      evals: evals.map((r: any) => ({
+        id: String(r.id),
+        criterionId: String(r.criterion_id ?? ''),
+        clauseRef: String(r.clause_ref ?? ''),
+        title: String(r.title ?? ''),
+        description: String(r.description ?? ''),
+        passDefinition: String(r.pass_definition ?? ''),
+        failDefinition: String(r.fail_definition ?? ''),
+        layer: String(r.layer ?? ''),
+        checkType: String(r.check_type ?? ''),
+        severity: String(r.severity ?? ''),
+        modality: String(r.modality ?? 'any'),
+        active: isTrue(r.active),
+        approved: isTrue(r.approved),
+        generatedAt: String(r.generated_at ?? ''),
+        generatedBy: String(r.generated_by ?? ''),
+        sourceExcerpt: String(r.source_excerpt ?? ''),
+        // Only semantic evals can actually be judged. A generated criterion the
+        // model labelled deterministic has NO code behind it — nothing would
+        // run it, and it must never be reported as a criterion the call passed.
+        runnable: String(r.layer ?? '') === 'semantic',
+      })),
+      // Whether the SOW upstream has drifted from what is stored. Always false
+      // while the fetch is stubbed, and correct the moment it is not.
+      upstreamReadable: upstream !== null,
+      upstreamDrifted: Boolean(upstream && upstreamFingerprint !== fingerprint),
+    };
+  },
+});
+
+server.addHandler({
+  name: 'saveGeneratedEvals',
+  description:
+    'Persist the criteria the eval-writer produced for one SOW version. Validates every row before writing — the browser proposes criteria, this decides what may grade a call.',
+  parameters: {
+    sowFingerprint: { description: 'The SOW version these were generated from', type: 'string' },
+    evalsJson: { description: 'The generated criteria, as a JSON array', type: 'string' },
+    generatedBy: { description: 'Agent link name and model', type: 'string' },
+  },
+  execute: async (args) => {
+    const db = connect();
+    const fingerprint = String(args.sowFingerprint ?? '').trim();
+    const sow = currentSowRow(db);
+    if (!sow) throw new Error('No scope of work is stored — save one before generating evals.');
+    if (String(sow.fingerprint) !== fingerprint) {
+      // The SOW moved while the browser was generating. Writing these would
+      // attach criteria to text nobody is grading against any more.
+      throw new Error(
+        `Rejected: these evals were generated from a scope of work that is no longer current.`,
+      );
+    }
+
+    let parsed: any[];
+    try {
+      parsed = JSON.parse(String(args.evalsJson ?? '[]'));
+    } catch {
+      throw new Error('Rejected: evalsJson is not valid JSON.');
+    }
+    if (!Array.isArray(parsed) || !parsed.length) {
+      throw new Error('Rejected: no criteria to save.');
+    }
+
+    const LAYERS = ['deterministic', 'semantic'];
+    const SEVERITIES = ['critical', 'high', 'medium', 'low'];
+    const MODALITIES = ['voice', 'text', 'any'];
+    const CHECK_TYPES = [
+      'intended_action', 'required_field', 'entity_resolution', 'escalation_sla',
+      'scope_boundary', 'flow_conformance', 'communication_fidelity', 'custom',
+    ];
+
+    const now = nowIso();
+    const generatedBy = String(args.generatedBy ?? '').trim() || 'unknown';
+    const written: string[] = [];
+    const rejected: Array<{ criterionId: string; why: string }> = [];
+
+    for (const e of parsed) {
+      const raw = String(e?.criterionId ?? '').trim().toUpperCase();
+      // Namespaced so a generated criterion can NEVER collide with a seeded
+      // CR-* id and quietly take over a hand-written check.
+      const criterionId = raw.startsWith('GEN-') ? raw : `GEN-${raw}`;
+      if (!/^GEN-[A-Z0-9-]{2,40}$/.test(criterionId)) {
+        rejected.push({ criterionId: raw || '(blank)', why: 'unusable criterion id' });
+        continue;
+      }
+      const pass = String(e?.passDefinition ?? '').trim();
+      const fail = String(e?.failDefinition ?? '').trim();
+      // A criterion with no stated bar cannot be judged consistently, and a
+      // judge given one will invent the other. Both or neither.
+      if (!pass || !fail) {
+        rejected.push({ criterionId, why: 'missing pass or fail definition' });
+        continue;
+      }
+      const layer = LAYERS.indexOf(String(e?.layer ?? '')) >= 0 ? String(e.layer) : 'semantic';
+      const severity =
+        SEVERITIES.indexOf(String(e?.severity ?? '')) >= 0 ? String(e.severity) : 'medium';
+      const modality =
+        MODALITIES.indexOf(String(e?.modality ?? '')) >= 0 ? String(e.modality) : 'any';
+      const checkType =
+        CHECK_TYPES.indexOf(String(e?.checkType ?? '')) >= 0 ? String(e.checkType) : 'custom';
+
+      const id = `GE-${fingerprint}-${criterionId}`;
+      const values = [
+        String(sow.id),
+        fingerprint,
+        criterionId,
+        String(e?.clauseRef ?? '').trim() || '—',
+        String(e?.title ?? '').trim() || criterionId,
+        String(e?.description ?? '').trim(),
+        pass,
+        fail,
+        layer,
+        checkType,
+        severity,
+        modality,
+        'true',
+        'true',
+        'auto',
+        now,
+        generatedBy,
+        String(e?.sourceExcerpt ?? '').trim(),
+      ];
+
+      const existing = db.query('select id from generated_evals where id = $1 limit 1', [id])
+        .rows[0];
+      if (existing) {
+        db.query(
+          `update generated_evals set
+             sow_id=$2, sow_fingerprint=$3, criterion_id=$4, clause_ref=$5, title=$6,
+             description=$7, pass_definition=$8, fail_definition=$9, layer=$10,
+             check_type=$11, severity=$12, modality=$13, active=$14, approved=$15,
+             approved_by=$16, generated_at=$17, generated_by=$18, source_excerpt=$19,
+             schema_version=1
+           where id=$1`,
+          [id, ...values],
+        );
+      } else {
+        db.query(
+          `insert into generated_evals
+             (id, sow_id, sow_fingerprint, criterion_id, clause_ref, title, description,
+              pass_definition, fail_definition, layer, check_type, severity, modality,
+              active, approved, approved_by, generated_at, generated_by, source_excerpt,
+              schema_version)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,1)`,
+          [id, ...values],
+        );
+      }
+      written.push(criterionId);
+    }
+
+    // Anything from this SOW that this run did NOT produce is retired rather
+    // than deleted: a regeneration that drops a criterion should stop it
+    // grading, not erase that it once existed.
+    let retired = 0;
+    const prior = db.query(
+      `select id, criterion_id from generated_evals
+        where id <> '__seed__' and sow_fingerprint = $1 and active = 'true'`,
+      [fingerprint],
+    ).rows;
+    for (const p of prior) {
+      if (written.indexOf(String(p.criterion_id)) >= 0) continue;
+      db.query(`update generated_evals set active = 'false' where id = $1`, [p.id]);
+      retired++;
+    }
+
+    return { saved: written.length, criteria: written, rejected, retired, sowFingerprint: fingerprint };
+  },
+});
+
+server.addHandler({
+  name: 'gradingCriteria',
+  description:
+    'Every semantic criterion a conversation should be graded against — the seeded CR-* set plus the active generated evals from the current SOW. The browser walks this list; adding a SOW criterion therefore adds it to grading with no code change.',
+  parameters: {},
+  execute: async () => {
+    const db = connect();
+    const sow = currentSowRow(db);
+    const fingerprint = sow ? String(sow.fingerprint ?? '') : '';
+
+    const seeded = Object.keys(SEMANTIC_CRITERIA).map((id) => ({
+      id,
+      clauseRef: SEMANTIC_CRITERIA[id].clauseRef,
+      title: id,
+      requires: SEMANTIC_CRITERIA[id].requires,
+      layer: 'semantic',
+      severity: 'medium',
+      modality: 'any',
+      generated: false,
+    }));
+
+    // Only semantic generated evals are RUNNABLE. A generated criterion the
+    // model called deterministic has no implementation — there is no code for
+    // it — so it is reported separately rather than handed to a judge that
+    // would answer it from the transcript alone.
+    const rows = activeGeneratedEvals(db, fingerprint);
+    const generated = rows.filter((r: any) => String(r.layer) === 'semantic').map(toJudgeCriterion);
+    const notRunnable = rows
+      .filter((r: any) => String(r.layer) !== 'semantic')
+      .map((r: any) => String(r.criterion_id));
+
+    return {
+      sowFingerprint: fingerprint,
+      seeded,
+      generated,
+      // Named plainly: these exist, they are not graded, and nothing may report
+      // them as passed.
+      notRunnable,
+      items: [...seeded, ...generated],
+    };
+  },
+});
+
+server.addHandler({
   name: 'gradingStatus',
   description:
     'Where each call is in grading — awaiting, grading, graded or unavailable. Deliberately light: no CMMS call, no transcript, no findings, because the screens poll this every few seconds while anything is in flight.',
@@ -2248,10 +2744,13 @@ server.addHandler({
   execute: async (args) => {
     const convoId = String(args.conversationId ?? '').trim();
     const criterionId = String(args.criterionId ?? '').trim();
-    const criterion = SEMANTIC_CRITERIA[criterionId];
-    if (!criterion) throw new Error(`Unknown semantic criterion ${criterionId}`);
-
     const db = connect();
+
+    // Seeded criteria live in code; generated ones live in generated_evals and
+    // are resolved here, so a criterion the SOW produced grades through exactly
+    // the same path as a hand-written one.
+    const criterion = SEMANTIC_CRITERIA[criterionId] ?? generatedCriterion(db, criterionId);
+    if (!criterion) throw new Error(`Unknown semantic criterion ${criterionId}`);
     const convo = db.query('select * from conversations where id = $1 limit 1', [convoId]).rows[0];
     if (!convo) throw new Error(`No conversation ${convoId}`);
 
@@ -2336,7 +2835,8 @@ server.addHandler({
   execute: async (args) => {
     const convoId = String(args.conversationId ?? '').trim();
     const criterionId = String(args.criterionId ?? '').trim();
-    const criterion = SEMANTIC_CRITERIA[criterionId];
+    const criterion =
+      SEMANTIC_CRITERIA[criterionId] ?? generatedCriterion(connect(), criterionId);
     if (!criterion) throw new Error(`Unknown semantic criterion ${criterionId}`);
 
     const verdictName = String(args.verdict ?? '').trim();

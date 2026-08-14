@@ -27,6 +27,7 @@ const AGENTS = {
   rootCause: 'root-cause-classifier',
   proposer: 'correction-proposer',
   callAnalysis: 'call-analysis',
+  evalWriter: 'eval-writer',
 } as const;
 
 export class JudgeTimeout extends Error {}
@@ -87,7 +88,61 @@ const AGENTS_LABEL: Record<string, string> = {
   [AGENTS.rootCause]: 'The root-cause classifier',
   [AGENTS.proposer]: 'The correction proposer',
   [AGENTS.callAnalysis]: 'The call analyst',
+  [AGENTS.evalWriter]: 'The eval writer',
 };
+
+/** Stamped on every generated eval, so a criterion can be traced to its author. */
+const EVAL_WRITER_VERSION = `${AGENTS.evalWriter}@claude-opus-4-7`;
+
+/** One criterion the eval writer produced from the scope of work. */
+export interface GeneratedCriterion {
+  criterionId: string;
+  clauseRef: string;
+  title: string;
+  description: string;
+  passDefinition: string;
+  failDefinition: string;
+  layer: 'deterministic' | 'semantic';
+  checkType: string;
+  severity: string;
+  modality: 'voice' | 'text' | 'any';
+  /** The SOW sentence this came from, verbatim. */
+  sourceExcerpt: string;
+}
+
+/**
+ * Turn the stored scope of work into testable criteria, and save them.
+ *
+ * Runs in the browser like every other agent — a Studio Function aborts a fetch
+ * at ~10s and this prompt carries a whole scope of work. The server re-validates
+ * every criterion before it is stored: the browser proposes what to grade
+ * against, it does not decide.
+ *
+ * The SOW fingerprint travels with the request so the server can refuse a set
+ * generated from text that is no longer current — otherwise a slow generation
+ * could attach criteria to a scope of work nobody grades against any more.
+ */
+export async function generateEvals(sow: {
+  fingerprint: string;
+  title: string;
+  body: string;
+}): Promise<{ saved: number; criteria: string[]; rejected: Array<{ criterionId: string; why: string }>; retired: number }> {
+  const v = await runAgent<{ criteria: GeneratedCriterion[] }>(AGENTS.evalWriter, {
+    scopeOfWork: sow.body,
+    title: sow.title,
+  });
+
+  const criteria = Array.isArray(v?.criteria) ? v.criteria : [];
+  if (!criteria.length) {
+    throw new JudgeInvalid('The eval writer returned no criteria for this scope of work.');
+  }
+
+  return await api.saveGeneratedEvals({
+    sowFingerprint: sow.fingerprint,
+    evalsJson: JSON.stringify(criteria),
+    generatedBy: EVAL_WRITER_VERSION,
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Verdict shapes — mirror the JSON schemas in evals/schemas/
