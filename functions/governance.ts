@@ -305,6 +305,49 @@ function toSentiment(level: unknown): string {
 const asBool = (v: unknown) => v === true || v === 'true';
 const boolText = (v: boolean) => (v ? 'true' : 'false');
 
+/** A comma-separated criterion-id column, back into a list. */
+const idList = (v: unknown): string[] =>
+  String(v ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+/**
+ * One `call_grades` row, read the way the rule says it must be read.
+ *
+ * `applicable` is AUTHORITATIVE: when it is false the score is absent, so
+ * responseQuality comes back null and no caller has to remember that a stored 0
+ * on such a row was never a score. `sentimentAgrees` is a tri-state — null means
+ * nothing to compare, which is not the same as disagreement.
+ */
+function readGrade(row: any) {
+  const applicable = asBool(row.applicable);
+  const agrees = String(row.sentiment_agrees ?? '').trim();
+  return {
+    id: String(row.id ?? ''),
+    conversationId: String(row.conversation_id ?? ''),
+    gradedAt: String(row.graded_at ?? ''),
+    gradedBy: String(row.graded_by ?? ''),
+    applicable,
+    responseQuality:
+      applicable && row.response_quality !== null && row.response_quality !== ''
+        ? Number(row.response_quality)
+        : null,
+    justification: String(row.quality_justification ?? ''),
+    sentiment: String(row.sentiment ?? ''),
+    sentimentReason: String(row.sentiment_reason ?? ''),
+    sentimentChannel: String(row.sentiment_channel ?? ''),
+    sentimentAgrees: agrees === '' ? null : agrees === 'true',
+    overallAssessment: String(row.overall_assessment ?? ''),
+    criteriaSatisfied: idList(row.criteria_satisfied),
+    criteriaBreached: idList(row.criteria_breached),
+    criteriaGraded: idList(row.criteria_graded),
+    criteriaUnavailable: idList(row.criteria_unavailable),
+    agentVersion: String(row.agent_version ?? ''),
+    schemaVersion: Number(row.schema_version) || 1,
+  };
+}
+
 function nowIso(startedAtFallback?: string) {
   // The sandbox has Date but the run has no wall-clock guarantee worth relying
   // on for ordering; use Date for stamps and let ISO strings sort naturally.
@@ -1180,6 +1223,15 @@ server.addHandler({
 
     const deviations = db.query('select * from deviations where conversation_id = $1', [id]).rows;
 
+    // The stored grade. Before this existed the justification, sentiment reason
+    // and overall assessment lived only in React state and vanished on reload —
+    // the score survived, its reasoning did not.
+    const gradeRow = db.query(
+      `select * from call_grades where conversation_id = $1 and id <> '__seed__' limit 1`,
+      [id],
+    ).rows[0];
+    const grade = gradeRow ? readGrade(gradeRow) : null;
+
     // Ground truth, fetched live at read time.
     //
     // The filter must be `id(equals)=N`, the same verified syntax the join
@@ -1208,6 +1260,7 @@ server.addHandler({
       satisfaction,
       deviations: deviations.map((d: any) => ({ ...d, evidence: JSON.parse(d.evidence || '[]') })),
       cmmsRecord,
+      grade,
     };
   },
 });
@@ -1982,15 +2035,134 @@ server.addHandler({
   },
 });
 
+/** The readings the analyst may return. `unknown` is a refusal, not a value. */
+const SENTIMENT_VALUES = ['happy', 'neutral', 'frustrated', 'distressed'];
+
+/**
+ * THE ONLY WRITER of a call's grade — `call_grades` and the denormalised
+ * `conversations.quality_score`, in one step.
+ *
+ * Internal by design: not a handler, and called from exactly one place. The
+ * table came from a CSV import, so the database enforces nothing — no primary
+ * key, no unique index, no foreign key, every column nullable. One number
+ * living in two places stays consistent by construction or not at all, so a
+ * second writer of `conversations.quality_score` anywhere in this file is the
+ * moment the rule breaks. There must never be one — the grep in
+ * docs/next-step-call-grades.md is meant to return exactly 1.
+ *
+ * Three things this is careful about:
+ *
+ *   - `response_quality` is NULL when the call was not applicable, never 0. A
+ *     zero would read as the worst possible call rather than the absence of a
+ *     score, and `applicable='false'` is what every reader must believe.
+ *   - `sentiment_agrees` is '' when either side is missing or the analyst
+ *     answered `unknown`. A gap is not a contradiction, and recording one as
+ *     'false' would manufacture disagreements out of silence.
+ *   - `claimed_at` / `claimed_by` are left exactly as found. Nothing claims a
+ *     row yet, and when something does, a re-grade must not clear its claim.
+ */
+function writeCallGrade(
+  db: any,
+  g: {
+    conversationId: string;
+    applicable: boolean;
+    /** 0-100, already validated. NULL whenever the call was not applicable. */
+    responseQuality: number | null;
+    justification: string;
+    /** The analyst's reading. '' or 'unknown' both mean it declined to say. */
+    sentiment: string;
+    sentimentReason: string;
+    /** What the channel held BEFORE this grade — a gap fill is not agreement. */
+    sentimentChannel: string;
+    overallAssessment: string;
+    criteriaSatisfied: string;
+    criteriaBreached: string;
+    criteriaGraded: string;
+    criteriaUnavailable: string;
+    agentVersion: string;
+    gradedBy: string;
+  },
+) {
+  const id = `CG-${g.conversationId}`;
+  const score = g.applicable && g.responseQuality !== null ? Math.round(g.responseQuality) : null;
+
+  const read = SENTIMENT_VALUES.indexOf(g.sentiment) >= 0 ? g.sentiment : '';
+  const channel = SENTIMENT_VALUES.indexOf(g.sentimentChannel) >= 0 ? g.sentimentChannel : '';
+  const agrees = read && channel ? boolText(read === channel) : '';
+
+  const gradedAt = nowIso();
+  const values = [
+    boolText(g.applicable),
+    score,
+    g.justification,
+    read,
+    g.sentimentReason,
+    channel,
+    agrees,
+    g.overallAssessment,
+    g.criteriaSatisfied,
+    g.criteriaBreached,
+    g.criteriaGraded,
+    g.criteriaUnavailable,
+    g.agentVersion,
+    gradedAt,
+    g.gradedBy,
+  ];
+
+  // No unique index exists on this table either, so the upsert is
+  // select-then-write. The id is derived from the conversation, so a re-grade
+  // updates the one row rather than piling up a second history of the call.
+  const existing = db.query('select id from call_grades where id = $1 limit 1', [id]).rows[0];
+  if (existing) {
+    db.query(
+      `update call_grades set
+         applicable=$2, response_quality=$3, quality_justification=$4, sentiment=$5,
+         sentiment_reason=$6, sentiment_channel=$7, sentiment_agrees=$8, overall_assessment=$9,
+         criteria_satisfied=$10, criteria_breached=$11, criteria_graded=$12,
+         criteria_unavailable=$13, agent_version=$14, graded_at=$15, graded_by=$16,
+         schema_version=1
+       where id=$1`,
+      [id, ...values],
+    );
+  } else {
+    db.query(
+      `insert into call_grades
+         (id, conversation_id, applicable, response_quality, quality_justification, sentiment,
+          sentiment_reason, sentiment_channel, sentiment_agrees, overall_assessment,
+          criteria_satisfied, criteria_breached, criteria_graded, criteria_unavailable,
+          agent_version, graded_at, graded_by, schema_version, claimed_at, claimed_by)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,1,'','')`,
+      [id, g.conversationId, ...values],
+    );
+  }
+
+  // The denormalised copy, written in the same step and nowhere else. A call
+  // too thin to judge leaves it alone entirely rather than scoring it 0.
+  if (score !== null) {
+    db.query('update conversations set quality_score=$2 where id=$1', [g.conversationId, score]);
+  }
+
+  return { gradeId: id, scoreWritten: score, sentimentAgrees: agrees, gradedAt };
+}
+
 server.addHandler({
   name: 'saveCallAnalysis',
   description:
-    'Persist the one field of a call analysis that has a column: the response-quality score. Validates before writing. The prose has nowhere to live yet and is deliberately not stored.',
+    'Persist a call analysis: the whole grade to call_grades, and the score to conversations.quality_score, in one step. Validates before writing — the browser proposes, this decides what is stored.',
   parameters: {
     conversationId: { description: 'Conversation id', type: 'string' },
     applicable: { description: '1 when the call could be judged, 0 when too thin', type: 'number' },
-    responseQuality: { description: '0-100', type: 'number' },
+    responseQuality: { description: '0-100, or -1 when not applicable', type: 'number' },
     sentiment: { description: 'happy | neutral | frustrated | distressed | unknown', type: 'string' },
+    justification: { description: 'Why that response-quality score', type: 'string' },
+    sentimentReason: { description: 'Why that sentiment reading', type: 'string' },
+    overallAssessment: { description: 'The analyst\'s summary of the call', type: 'string' },
+    criteriaSatisfied: { description: 'Comma-separated criterion ids the call met', type: 'string' },
+    criteriaBreached: { description: 'Comma-separated criterion ids the call breached', type: 'string' },
+    criteriaGraded: { description: 'Comma-separated criterion ids actually attempted this run', type: 'string' },
+    criteriaUnavailable: { description: 'Comma-separated criterion ids whose judge never answered', type: 'string' },
+    agentVersion: { description: 'Agent link name and model that produced this', type: 'string' },
+    gradedBy: { description: 'auto | manual', type: 'string' },
   },
   execute: async (args) => {
     const db = connect();
@@ -1999,36 +2171,60 @@ server.addHandler({
     if (!convo) throw new Error(`No conversation ${convoId}`);
 
     const applicable = Number(args.applicable) === 1;
-    let scoreWritten: number | null = null;
+    let quality: number | null = null;
 
     if (applicable) {
       const q = Number(args.responseQuality);
       if (!Number.isFinite(q) || q < 0 || q > 100) {
         throw new Error(`Rejected: responseQuality must be 0-100, got "${args.responseQuality}"`);
       }
-      db.query('update conversations set quality_score=$2 where id=$1', [convoId, Math.round(q)]);
-      scoreWritten = Math.round(q);
+      quality = Math.round(q);
     }
-    // Not applicable writes nothing. A call too thin to judge keeps quality_score
-    // at 0, which the UI reads as "not scored" — never a real low score.
+    // Not applicable scores nothing. A call too thin to judge keeps whatever
+    // quality_score it had, which the UI reads as "not scored" — never a real
+    // low score, and never a 0 stored as if it were one.
 
     // Sentiment: the CHANNEL is authoritative. The analyst's reading only fills
     // a gap, never overwrites a value the channel supplied — a disagreement is
-    // shown to the user, not silently resolved here.
+    // recorded on the grade and shown to the user, not silently resolved here.
     const incoming = String(args.sentiment ?? '').trim();
-    const valid = ['happy', 'neutral', 'frustrated', 'distressed'];
+    if (incoming && incoming !== 'unknown' && SENTIMENT_VALUES.indexOf(incoming) < 0) {
+      throw new Error(`Rejected: sentiment must be one of ${SENTIMENT_VALUES.join(' | ')} | unknown, got "${incoming}"`);
+    }
+    const channelSentiment = String(convo.sentiment ?? '').trim();
     let sentimentWritten: string | null = null;
-    if (!String(convo.sentiment ?? '').trim() && valid.indexOf(incoming) >= 0) {
+    if (!channelSentiment && SENTIMENT_VALUES.indexOf(incoming) >= 0) {
       db.query('update conversations set sentiment=$2 where id=$1', [convoId, incoming]);
       sentimentWritten = incoming;
     }
 
+    const written = writeCallGrade(db, {
+      conversationId: convoId,
+      applicable,
+      responseQuality: quality,
+      justification: String(args.justification ?? ''),
+      sentiment: incoming,
+      sentimentReason: String(args.sentimentReason ?? ''),
+      // Compared against what the channel held BEFORE the gap fill above, so a
+      // reading that filled a silence is never recorded as agreement.
+      sentimentChannel: channelSentiment,
+      overallAssessment: String(args.overallAssessment ?? ''),
+      criteriaSatisfied: String(args.criteriaSatisfied ?? ''),
+      criteriaBreached: String(args.criteriaBreached ?? ''),
+      criteriaGraded: String(args.criteriaGraded ?? ''),
+      criteriaUnavailable: String(args.criteriaUnavailable ?? ''),
+      agentVersion: String(args.agentVersion ?? ''),
+      gradedBy: String(args.gradedBy ?? 'manual'),
+    });
+
     return {
       conversationId: convoId,
-      scoreWritten,
+      gradeId: written.gradeId,
+      scoreWritten: written.scoreWritten,
       sentimentWritten,
+      sentimentAgrees: written.sentimentAgrees,
       channelSentiment: convo.sentiment || null,
-      note: 'Justification, sentiment reason and overall assessment are not persisted — no column exists for them.',
+      gradedAt: written.gradedAt,
     };
   },
 });

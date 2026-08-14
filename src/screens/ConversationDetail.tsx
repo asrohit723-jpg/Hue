@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   api,
+  type CallGrade,
   type ConversationView,
   type DeviationWithEvidence,
   type TurnWithToolIO,
@@ -163,6 +164,29 @@ function stamp(v: unknown): string | null {
   });
 }
 
+/**
+ * A stored grade, in the shape the tabs already read.
+ *
+ * Mapping into `CallAnalysis` rather than teaching the tabs a second shape is
+ * the point: a grade loaded from the database and one just produced by Run
+ * evals render through exactly the same code, so they cannot drift apart.
+ *
+ * `sentiment` falls back to 'unknown' — the tabs treat that as "the analyst
+ * declined to say", which is what an empty column means.
+ */
+function storedAnalysis(g: CallGrade): CallAnalysis {
+  return {
+    applicable: g.applicable,
+    responseQuality: g.responseQuality,
+    responseQualityJustification: g.justification,
+    sentiment: (g.sentiment || 'unknown') as CallAnalysis['sentiment'],
+    sentimentReason: g.sentimentReason,
+    overallAssessment: g.overallAssessment,
+    criteriaSatisfied: g.criteriaSatisfied,
+    criteriaBreached: g.criteriaBreached,
+  };
+}
+
 export function ConversationDetail({
   id,
   onBack,
@@ -192,6 +216,10 @@ export function ConversationDetail({
         const res = await api.getConversation(id);
         if (cancelled) return;
         setData(res);
+        // The stored grade, shown on load. Its prose used to live only in the
+        // state above, so a reload left the score with nothing explaining it.
+        setAnalysis(res.grade ? storedAnalysis(res.grade) : null);
+        setAnalysisChannelSentiment(res.grade?.sentimentChannel || null);
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
       }
@@ -224,8 +252,13 @@ export function ConversationDetail({
       }
       // The call analysis is the last step of the same deliberate action, so a
       // score and its reasoning arrive with the verdicts rather than on open.
+      // It carries what this run attempted and what never answered, so the
+      // stored grade keeps an unreachable judge distinct from a passing one.
       setGrading('call analysis');
-      const an = await runCallAnalysis(id);
+      const an = await runCallAnalysis(id, {
+        graded: runs.map((r) => r.criterionId),
+        unavailable: runs.filter((r) => r.verdict === 'unavailable').map((r) => r.criterionId),
+      });
       if (an.ok && an.analysis) {
         setAnalysis(an.analysis);
         setAnalysisChannelSentiment(an.channelSentiment ?? null);

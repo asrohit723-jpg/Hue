@@ -76,6 +76,12 @@ async function runAgent<T>(agent: string, input: unknown, attempts = 2): Promise
     : new Error(`${AGENTS_LABEL[agent] ?? agent} failed: ${lastError}`);
 }
 
+/**
+ * Stamped on every grade this file produces, so a stored score can be traced to
+ * what produced it. A grade with no provenance is a number nobody can re-check.
+ */
+const CALL_ANALYSIS_VERSION = `${AGENTS.callAnalysis}@claude-opus-4-7`;
+
 const AGENTS_LABEL: Record<string, string> = {
   [AGENTS.conformance]: 'The conformance judge',
   [AGENTS.rootCause]: 'The root-cause classifier',
@@ -330,7 +336,15 @@ export interface CallAnalysisRun {
  * A call too thin to judge comes back applicable=false and writes no score; a
  * judge that never answers comes back unavailable and writes nothing at all.
  */
-export async function runCallAnalysis(conversationId: string): Promise<CallAnalysisRun> {
+export async function runCallAnalysis(
+  conversationId: string,
+  run?: {
+    /** Criteria actually attempted this run. */
+    graded?: string[];
+    /** Of those, the ones whose judge never answered. */
+    unavailable?: string[];
+  },
+): Promise<CallAnalysisRun> {
   try {
     const ctx = await api.callAnalysisContext(conversationId);
     const v = await runAgent<CallAnalysis>(AGENTS.callAnalysis, {
@@ -351,6 +365,18 @@ export async function runCallAnalysis(conversationId: string): Promise<CallAnaly
       applicable: v.applicable ? 1 : 0,
       responseQuality: typeof v.responseQuality === 'number' ? v.responseQuality : -1,
       sentiment: v.sentiment ?? '',
+      justification: v.responseQualityJustification ?? '',
+      sentimentReason: v.sentimentReason ?? '',
+      overallAssessment: v.overallAssessment ?? '',
+      criteriaSatisfied: (v.criteriaSatisfied ?? []).join(','),
+      criteriaBreached: (v.criteriaBreached ?? []).join(','),
+      // What this run attempted, and which of those never came back. Storing
+      // the second is what keeps "the judge was unreachable" distinct from
+      // "the criterion passed" once the page is reloaded and the run is gone.
+      criteriaGraded: (run?.graded ?? []).join(','),
+      criteriaUnavailable: (run?.unavailable ?? []).join(','),
+      agentVersion: CALL_ANALYSIS_VERSION,
+      gradedBy: 'manual',
     });
 
     return {

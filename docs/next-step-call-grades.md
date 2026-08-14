@@ -1,11 +1,16 @@
 # Next step — wire `call_grades` (write path + read path)
 
-**Status: not started. The table exists and is empty apart from its sentinel
-row. No code reads or writes it yet.** Everything below is agreed and approved;
-it just needs building.
+**Status: steps 1 and 2 are BUILT and deployed to preview as v37 (14 Aug 2026).**
+`writeCallGrade` is the single writer of both `call_grades` and
+`conversations.quality_score`; `getConversation` returns the stored grade and
+`ConversationDetail` seeds its analysis state from it, so the justification,
+sentiment reason and overall assessment now survive a reload.
 
-Steps 1 and 2 are done together. **Step 3 (the reload nudge) is explicitly held**
-— do not build it in this pass.
+**Step 3 (the reload nudge) is still held** — `claimed_at` / `claimed_by` are
+written as `''` on insert and left untouched on re-grade, waiting for it.
+
+The rest of this document is the spec as approved and built against; it is kept
+because the rules in it outlive the pass that implemented them.
 
 ---
 
@@ -23,9 +28,13 @@ which is why `schema_version` is in there.
 
 Run `facilio vibe db describe call_grades` for the live shape.
 
-Today a call's grade lives only in `conversations.quality_score`. The
-justification, sentiment reason and overall assessment are held in React state
-and **vanish on reload** — that is the gap these two steps close.
+Before this pass a call's grade lived only in `conversations.quality_score`. The
+justification, sentiment reason and overall assessment were held in React state
+and **vanished on reload** — that is the gap these two steps closed.
+
+Two preview rows carry hand-written test grades from the verification below —
+`CG-L-2431` and `CG-L-2437`. A real **Run evals** overwrites either in place;
+that is what the deterministic id is for.
 
 ---
 

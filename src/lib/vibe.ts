@@ -206,6 +206,36 @@ export type ConversationView = Conversation & {
   srNumberClaimed: string | null;
 };
 
+/**
+ * One call's stored grade, as `getConversation` returns it.
+ *
+ * The server has already applied the rule that `applicable=false` is
+ * authoritative, so `responseQuality` is null on a call that could not be
+ * judged — there is no stored 0 to misread here. `sentimentAgrees` is
+ * tri-state: null means there was nothing to compare, not a disagreement.
+ */
+export interface CallGrade {
+  id: string;
+  conversationId: string;
+  gradedAt: string;
+  gradedBy: string;
+  applicable: boolean;
+  responseQuality: number | null;
+  justification: string;
+  sentiment: string;
+  sentimentReason: string;
+  sentimentChannel: string;
+  sentimentAgrees: boolean | null;
+  overallAssessment: string;
+  criteriaSatisfied: string[];
+  criteriaBreached: string[];
+  criteriaGraded: string[];
+  /** Judges that never answered. Never to be read as criteria that passed. */
+  criteriaUnavailable: string[];
+  agentVersion: string;
+  schemaVersion: number;
+}
+
 export function toConversation(
   r: ConversationRow,
   turns: TranscriptTurnRow[] = [],
@@ -328,6 +358,8 @@ export const api = {
     aiSummary: string | null;
     aiTags: string | null;
     satisfaction: string | null;
+    /** The stored grade, or null when this call has never been graded. */
+    grade: CallGrade | null;
   }> => {
     const res = await call<{
       conversation: ConversationRow;
@@ -339,6 +371,7 @@ export const api = {
       aiSummary?: string | null;
       aiTags?: string | null;
       satisfaction?: string | null;
+      grade?: CallGrade | null;
     }>('governance', 'getConversation', { id });
     return {
       transcriptSource: res.transcriptSource ?? 'stored',
@@ -349,6 +382,7 @@ export const api = {
       conversation: toConversation(res.conversation, res.turns),
       deviations: res.deviations.map(withExtras),
       cmmsRecord: res.cmmsRecord,
+      grade: res.grade ?? null,
     };
   },
 
@@ -426,18 +460,36 @@ export const api = {
       durationSec: number | null;
     }>('governance', 'callAnalysisContext', { conversationId }),
 
-  /** Persist the one analysed field that has a column. */
+  /**
+   * Persist a whole call analysis — the grade row and the denormalised score,
+   * written together by the one function allowed to write either.
+   *
+   * Handler parameters may only be `number` or `string`, so the criteria lists
+   * cross as comma-separated ids. That is also how the columns are defined.
+   */
   saveCallAnalysis: (a: {
     conversationId: string;
     applicable: number;
     responseQuality: number;
     sentiment: string;
+    justification: string;
+    sentimentReason: string;
+    overallAssessment: string;
+    criteriaSatisfied: string;
+    criteriaBreached: string;
+    criteriaGraded: string;
+    criteriaUnavailable: string;
+    agentVersion: string;
+    gradedBy: string;
   }) =>
-    call<{ scoreWritten: number | null; sentimentWritten: string | null; channelSentiment: string | null }>(
-      'governance',
-      'saveCallAnalysis',
-      a,
-    ),
+    call<{
+      gradeId: string;
+      scoreWritten: number | null;
+      sentimentWritten: string | null;
+      sentimentAgrees: string;
+      channelSentiment: string | null;
+      gradedAt: string;
+    }>('governance', 'saveCallAnalysis', a),
 
   /** Persist a proposal the browser-side judges produced. */
   saveCorrection: (deviationId: string, rootCause: string, proposalJson: string) =>
