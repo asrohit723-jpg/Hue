@@ -27,7 +27,7 @@ import { page } from '../lib/layout';
 /**
  * Call detail — the full CONVERSATION DETAIL block of the design
  * ("Helpdesk Governance.dc.html", lines 1791-1995): the recording bar, the
- * chat-bubble transcript with tool calls inline, the call summary, the CMMS
+ * chat-bubble transcript, the call summary, the CMMS
  * ground-truth panel that turns red when the promised record is not there, and
  * the tabbed quality card — Scorecard, Eval verdict, Sentiment.
  *
@@ -35,19 +35,19 @@ import { page } from '../lib/layout';
  * exist, the element stays and says so — an empty meter and a "—" are honest,
  * where a fabricated number is not. Specifically:
  *
- *   - The recording bar renders, and reports whether a recording exists at all
- *     (live call logs carry a recordingFileId). Playback is not wired, so the
- *     transport is disabled rather than animating over silence.
- *   - The scorecard's four measures — latency, STT, TTS, response quality — are
- *     in the frozen contract but nothing populates them yet, so each row shows
- *     an empty meter and "not measured" instead of the design's hardcoded
- *     88 / 94 / 91.
+ *   - The recording bar plays the real recording, fetched on press. A call with
+ *     none says so and the transport stays disabled.
+ *   - The scorecard shows the ONE measure that exists, response quality. The
+ *     design's other three — latency, STT, TTS — are in the frozen contract and
+ *     nothing populates them, so they are a footnote rather than three empty
+ *     meters reading "not measured", which looked broken while telling the
+ *     truth.
  *   - The sentiment strip shows the ONE end-of-call sentiment we hold, as a
  *     single band. The design fabricates a ten-segment arc per sentiment; a
  *     shape implying we tracked sentiment over time would be a lie about what
  *     was measured.
- *   - Tool calls render inline exactly as designed, and a call whose channel
- *     records none says that in the same slot rather than leaving a gap.
+ *   - Tool calls are not shown at all. Nothing imports them, so there is no
+ *     slot and no empty state announcing their absence.
  *
  * Everything else is read from the call: the transcript from the connection or
  * the app DB, and the service request fetched live from the CMMS at read time.
@@ -411,10 +411,11 @@ export function ConversationDetail({
   // Live call logs usually have no caller name, so this is the phone number.
   const name = c.callerLabel;
   const firstFinding = deviations[0] ?? null;
+  // Tool rows are dropped rather than drawn. Nothing imports tool calls, but
+  // ingestTranscript can still store one, and a tool turn rendered through the
+  // speech bubble would be an empty bubble — exactly the kind of element that
+  // looks broken.
   const textTurns = c.transcript.filter((t) => !t.toolCall);
-  // The tool call that failed, if one did — the missing-record panel quotes it
-  // rather than describing the failure in the abstract.
-  const failedTool = c.transcript.find((t) => t.toolCall && t.toolCall.status !== 'success');
   const aiSections = parseAiSummary(data.aiSummary);
   // The channel's own topic tags, when it produced any.
   const channelTags = (data.aiTags ?? '')
@@ -684,44 +685,17 @@ export function ConversationDetail({
           >
             <h3 style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>Transcript</h3>
             <span style={{ fontSize: 12, color: 'var(--ink-600)' }}>
-              {textTurns.length} turns · tool calls shown inline
+              {textTurns.length} turns
               {data.transcriptSource === 'live' ? ' · read live' : ''}
             </span>
           </div>
           <div style={{ padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 16 }}>
-            {c.transcript.map((t, i) => (
+            {textTurns.map((t, i) => (
               <Turn key={i} t={t} />
             ))}
-            {c.transcript.length === 0 && (
+            {textTurns.length === 0 && (
               <div style={{ fontSize: 13, color: 'var(--ink-600)' }}>
                 No transcript stored for this call.
-              </div>
-            )}
-            {/* The design renders tool calls inline between the turns. The
-                helpdesk voice channel logs none — get-call-tool-calls cannot
-                resolve a voice thread yet — so the slot says so rather than
-                closing up as though the agent used no tools. */}
-            {c.transcript.length > 0 && !c.transcript.some((t) => t.toolCall) && (
-              <div
-                style={{
-                  border: '1px dashed var(--border-default)',
-                  background: 'var(--ink-050)',
-                  borderRadius: 8,
-                  padding: '10px 13px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  fontSize: 12,
-                  color: 'var(--ink-600)',
-                }}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--ink-400)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
-                </svg>
-                <span style={{ fontFamily: 'var(--font-mono)' }}>No tool calls recorded</span>
-                <span style={{ marginLeft: 'auto' }}>
-                  This channel does not log them — see docs/live-call-ingest.md
-                </span>
               </div>
             )}
           </div>
@@ -825,7 +799,6 @@ export function ConversationDetail({
           <CmmsPanel
             rec={cmmsRecord}
             conversation={c}
-            failedTool={failedTool}
             onOpenIntervention={firstFinding ? () => onOpenDeviation(firstFinding.id) : null}
           />
 
@@ -849,9 +822,9 @@ export function ConversationDetail({
  * The recording transport, at the design's measurements.
  *
  * Live call logs carry a `recordingFileId`, so whether a recording EXISTS is
- * real and is reported. Streaming its bytes into an <audio> element is not
- * wired, so the transport stays disabled: a progress bar that animates over
- * nothing would be the most misleading control on the screen.
+ * real and is reported. The URL is fetched on press and never stored, since the
+ * channel signs it and it expires; a call with no recording keeps the transport
+ * disabled rather than animating a progress bar over nothing.
  */
 function RecordingBar({
   durationLabel,
@@ -1148,9 +1121,10 @@ function QualityCard({
  * Scorecard.
  *
  * `Scorecard` in the frozen contract carries latencyMs, sttAccuracy, ttsQuality
- * and responseQuality, and nothing populates any of them — no scorecard row has
- * ever been written. The design hardcodes 88 / 94 / 91; those numbers describe
- * nothing, so each row keeps its meter and reports that it was not measured.
+ * and responseQuality. Only the last is ever populated — the other three are
+ * properties of audio nothing has listened to. They were three rows of "not
+ * measured" over three empty meters; the fact is now stated once as a footnote,
+ * which says the same thing without looking like a broken panel.
  */
 function ScoreTab({
   conversation: c,
@@ -1162,10 +1136,11 @@ function ScoreTab({
   // A score just produced by Run evals beats the stored one, which is a run old.
   const live = analysis?.applicable ? (analysis.responseQuality ?? null) : null;
   const score = live ?? (c.qualityScore && c.qualityScore > 0 ? c.qualityScore : null);
+  // Only what is measured. Latency, speech-to-text and text-to-speech are in
+  // the frozen contract and nothing populates any of them, so they were three
+  // rows of "not measured" over three empty meters — a scorecard that looked
+  // broken while telling the truth. The fact is stated once, in a footnote.
   const rows = [
-    { label: 'Latency', value: null as number | null, display: 'not measured' },
-    { label: 'Speech-to-text accuracy', value: null as number | null, display: 'not measured' },
-    { label: 'Text-to-speech quality', value: null as number | null, display: 'not measured' },
     {
       label: 'Response quality',
       value: score,
@@ -1224,6 +1199,13 @@ function ScoreTab({
           </div>
         </div>
       ))}
+
+      {/* The three audio measures, said once instead of as three empty rows. */}
+      <p style={{ margin: 0, fontSize: 11, color: 'var(--ink-500)', lineHeight: '16px' }}>
+        Latency, speech-to-text and text-to-speech are properties of the audio, and nothing
+        measures them — so they are not scored here rather than shown as empty.
+      </p>
+
       {analysis && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 2 }}>
           {analysis.responseQualityJustification && (
@@ -1474,15 +1456,6 @@ function SentimentTab({
   const read = analysis?.sentiment && analysis.sentiment !== 'unknown' ? analysis.sentiment : null;
   const disagree = Boolean(channel && read && channel !== read);
   const tone = sentimentTone(c.sentiment);
-  const band = c.sentiment
-    ? c.sentiment === 'happy'
-      ? 'var(--success-500)'
-      : c.sentiment === 'frustrated'
-        ? 'var(--warning-500)'
-        : c.sentiment === 'distressed'
-          ? 'var(--danger-500)'
-          : 'var(--ink-200)'
-    : 'var(--ink-100)';
 
   return (
     <div style={{ padding: '14px 16px' }}>
@@ -1500,21 +1473,6 @@ function SentimentTab({
         >
           {c.sentiment ? label(c.sentiment) : 'Unknown'}
         </span>
-      </div>
-      <div style={{ display: 'flex', gap: 3, marginTop: 12 }}>
-        <div style={{ flex: 1, height: 10, borderRadius: 2, background: band }} />
-      </div>
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          fontSize: 11,
-          color: 'var(--ink-500)',
-          marginTop: 6,
-        }}
-      >
-        <span>0:00</span>
-        <span>{duration(c.durationSec)}</span>
       </div>
       {analysis && read && (
         <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -1550,7 +1508,7 @@ function SentimentTab({
       )}
       <p style={{ margin: '10px 0 0', fontSize: 11, color: 'var(--ink-500)', lineHeight: '16px' }}>
         One reading for the whole call — the channel reports satisfaction at the end, not over
-        time, so this is shown as a single band rather than a trend.
+        time, so there is no trend to show.
         {!analysis && ' Run evals to read the caller\'s emotion from the transcript.'}
       </p>
     </div>
@@ -1585,85 +1543,14 @@ function Section({
 }
 
 /**
- * One transcript entry. Caller and agent are chat bubbles on opposite sides;
- * a tool call spans the full width so the record it did or did not create reads
- * as an event in the call rather than as something either party said.
+ * One transcript entry. Caller and agent are chat bubbles on opposite sides.
+ *
+ * Tool calls are not rendered. The columns are still on transcript_turns and
+ * the handler that would read them is still there, dormant — but nothing in
+ * this app imports them, so there is nothing to draw and no empty slot
+ * announcing their absence.
  */
 function Turn({ t }: { t: TurnWithToolIO }) {
-  if (t.toolCall) {
-    const ok = t.toolCall.status === 'success';
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 4 }}>
-        <div
-          style={{
-            width: '100%',
-            border: `1px solid ${ok ? 'var(--border-default)' : 'var(--danger-500)'}`,
-            background: ok ? 'var(--ink-050)' : 'var(--danger-050)',
-            borderRadius: 8,
-            padding: '10px 13px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 6,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span
-              style={{
-                fontFamily: 'var(--font-mono)',
-                fontSize: 12,
-                fontWeight: 500,
-                color: ok ? 'var(--ink-700)' : 'var(--danger-700)',
-              }}
-            >
-              {t.toolCall.name}
-            </span>
-            <span
-              style={{
-                fontSize: 11,
-                fontWeight: 600,
-                padding: '1px 8px',
-                borderRadius: 999,
-                background: ok ? 'var(--success-050)' : 'rgba(182,25,25,0.12)',
-                color: ok ? 'var(--success-700)' : 'var(--danger-700)',
-              }}
-            >
-              {t.toolCall.status}
-            </span>
-            {t.at && (
-              <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--ink-500)' }}>
-                {t.at}
-              </span>
-            )}
-          </div>
-          {t.toolArgs && (
-            <div
-              style={{
-                fontSize: 12,
-                color: 'var(--ink-700)',
-                fontFamily: 'var(--font-mono)',
-                lineHeight: '18px',
-                wordBreak: 'break-word',
-              }}
-            >
-              {t.toolArgs}
-            </div>
-          )}
-          {(t.toolResult || t.toolCall.error) && (
-            <div
-              style={{
-                fontSize: 12,
-                color: ok ? 'var(--ink-700)' : 'var(--danger-700)',
-                fontWeight: 500,
-                wordBreak: 'break-word',
-              }}
-            >
-              {t.toolCall.error ?? t.toolResult}
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
 
   const isAgent = t.performer === 'agent';
   const isSystem = t.performer === 'system';
@@ -1720,12 +1607,10 @@ function Turn({ t }: { t: TurnWithToolIO }) {
 function CmmsPanel({
   rec,
   conversation,
-  failedTool,
   onOpenIntervention,
 }: {
   rec: Record<string, unknown> | null;
   conversation: ConversationView;
-  failedTool: TurnWithToolIO | undefined;
   onOpenIntervention: (() => void) | null;
 }) {
   const found = !!rec;
@@ -1892,12 +1777,6 @@ function CmmsPanel({
               padding: '10px 12px',
             }}
           >
-            {failedTool?.toolCall && (
-              <span>
-                {failedTool.toolCall.name} returned{' '}
-                <b>{failedTool.toolCall.error ?? failedTool.toolCall.status}</b>
-              </span>
-            )}
             {conversation.srNumberClaimed && (
               <span>
                 Agent read back reference <b>{conversation.srNumberClaimed}</b>

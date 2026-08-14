@@ -60,6 +60,10 @@ export function Conversations({
   search?: string;
 }) {
   const [sync, setSync] = useState<Sync | null>(null);
+  // Every site the account has, not just those that reached a conversation.
+  // Live calls carry no site, so deriving the filter from the list showed
+  // whichever sites a CMMS join had happened to resolve — usually one.
+  const [cmmsSites, setCmmsSites] = useState<string[]>([]);
   const [items, setItems] = useState<ConversationView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
@@ -96,6 +100,15 @@ export function Conversations({
       try {
         const rows = await api.listConversations(200);
         if (!cancelled) setItems(rows);
+        // A light read — one list-sites call, not the whole overview. If it
+        // fails the filter falls back to the sites seen on conversations, so it
+        // is never empty, just shorter.
+        api
+          .sites(200)
+          .then((r) => {
+            if (!cancelled) setCmmsSites(r.sites.map((x) => x.name).filter(Boolean));
+          })
+          .catch(() => {});
         // Read-only: reports how far behind the channel we are and how much is
         // waiting on the grading job. Ingest never happens from here — that
         // path has no claim and two reloads would race to write the same call.
@@ -238,9 +251,16 @@ export function Conversations({
   const sites = useMemo(
     () => [
       'All sites',
-      ...Array.from(new Set((items ?? []).map((c) => c.site).filter((s): s is string => !!s))).sort(),
+      ...Array.from(
+        new Set([
+          ...cmmsSites,
+          // Unioned, so a site somehow absent from the account list is still
+          // filterable rather than unreachable.
+          ...(items ?? []).map((c) => c.site).filter((s): s is string => !!s),
+        ]),
+      ).sort(),
     ],
-    [items],
+    [items, cmmsSites],
   );
 
   const rows = useMemo(() => {
