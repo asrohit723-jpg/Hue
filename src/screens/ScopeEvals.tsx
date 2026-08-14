@@ -789,16 +789,35 @@ export function ScopeEvals() {
 
           <button
             className="hue-btn"
-            onClick={() => setCreating(true)}
+            onClick={() => setCreating((v) => !v)}
+            aria-expanded={creating}
             style={{
               height: 32, padding: '0 14px', borderRadius: 6,
-              border: '1px solid var(--blue-500)', background: 'var(--blue-500)',
-              color: '#fff', fontWeight: 500, fontSize: 13, cursor: 'pointer',
+              border: '1px solid var(--blue-500)',
+              background: creating ? '#fff' : 'var(--blue-500)',
+              color: creating ? 'var(--blue-600)' : '#fff',
+              fontWeight: 500, fontSize: 13, cursor: 'pointer',
             }}
           >
-            + New eval
+            {creating ? 'Cancel' : '+ New eval'}
           </button>
         </div>
+
+        {/* Directly under the button that opens it. Mounted after the list,
+            this sat ~2,200px below the fold with 23 evals on screen — the form
+            opened and nothing appeared to happen, which is indistinguishable
+            from a broken button. */}
+        {creating && (
+          <NewEval
+            busy={savingEval}
+            error={evalError}
+            onCancel={() => {
+              setCreating(false);
+              setEvalError(null);
+            }}
+            onSave={saveEval}
+          />
+        )}
 
         {evalRows.map((e) => (
           <EvalCard key={e.id} e={e} />
@@ -823,17 +842,6 @@ export function ScopeEvals() {
       </div>
 
 
-      {creating && (
-        <NewEval
-          busy={savingEval}
-          error={evalError}
-          onCancel={() => {
-            setCreating(false);
-            setEvalError(null);
-          }}
-          onSave={saveEval}
-        />
-      )}
     </div>
   );
 }
@@ -990,7 +998,7 @@ function NewEval({
   };
 
   return (
-    <div style={{ background: '#fff', border: '1px solid var(--blue-500)', borderRadius: 8, marginTop: 16, overflow: 'hidden' }}>
+    <div style={{ background: '#fff', borderBottom: '2px solid var(--blue-500)' }}>
       <div style={{ padding: '13px 20px', background: 'var(--blue-025)', borderBottom: '1px solid var(--blue-100)' }}>
         <h3 style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>New eval</h3>
         <div style={{ fontSize: 12, color: 'var(--ink-600)', marginTop: 2 }}>
@@ -1002,7 +1010,14 @@ function NewEval({
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,2fr) minmax(0,1fr)', gap: 12 }}>
           <div>
             <label style={lbl}>Title</label>
-            <input className="hue-field" style={field} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Callback promised is logged" />
+            <input
+              className="hue-field"
+              style={field}
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Callback promised is logged"
+              autoFocus
+            />
           </div>
           <div>
             <label style={lbl}>Clause ref</label>
