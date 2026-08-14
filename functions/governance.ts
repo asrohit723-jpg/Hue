@@ -7,6 +7,20 @@
  * no cached copy of a CMMS record anywhere below, deliberately — a ground-truth
  * check that reads a copy is not a ground-truth check.
  *
+ * NO AGENT CALLS LIVE IN THIS FILE, AND NONE MAY BE ADDED.
+ *
+ * A Studio Function's fetch aborts at ~10s. Every agent Hue uses runs longer
+ * than that on real input — measured 10.8s to 33.8s — so an agent called from
+ * here does not run slowly, it fails. Worse, it fails as a timeout, which is
+ * indistinguishable from "the model had nothing to say" unless every caller is
+ * careful, and that is a rule no codebase keeps for long.
+ *
+ * So model calls go directly from the browser via vibe.executeAgent, which has
+ * no such ceiling — see src/lib/judges.ts, the single place any agent is
+ * invoked. This file keeps everything else: the deterministic checks, the CMMS
+ * reads and writes, and the validation of any verdict the browser sends back.
+ * The browser proposes; the server decides what is written.
+ *
  * Runtime facts this is written against (verified by probe, not assumed):
  *   - env map: DB_USER, DB_PASSWORD, SCHEMA. It is DB_USER, not DB_USERNAME.
  *   - system: CONNECTIONS_URL + CONNECTIONS_TOKEN present; AGENTS_URL absent.
@@ -261,15 +275,6 @@ function toSentiment(level: unknown): string {
   return '';
 }
 
-/**
- * Call an AI Studio action through the same connections service.
- *
- * The probe showed process.system provides AGENTS_TOKEN but NOT AGENTS_URL, so
- * the documented `${process.system.AGENTS_URL}` path does not exist from a
- * function. Rather than guess a hostname — which the authoring guide explicitly
- * forbids — the judges are reached as connection actions on facilio-ai-studio,
- * over the CONNECTIONS_URL the platform does provide.
- */
 
 /**
  * Run one judge and return its parsed verdict.
@@ -1171,8 +1176,6 @@ const SEMANTIC_CRITERIA: Record<string, { clauseRef: string; requires: string }>
 
 
 
-const ROOT_CAUSE_AGENT = 'root-cause-classifier_4b48798f3211425e98520e3056ab02b4';
-const PROPOSER_AGENT = 'correction-proposer_4b48798f3211425e98520e3056ab02b4';
 
 /**
  * Request-scoped memo for CMMS records.
