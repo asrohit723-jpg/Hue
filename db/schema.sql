@@ -32,8 +32,9 @@
 -- select-then-write. Run `facilio vibe db describe <table>` for the truth.
 --
 -- Five tables exist: conversations, transcript_turns, deviations, corrections,
--- call_grades. eval_runs, notifications, criteria and the sow_* tables are
--- described here but have never been created.
+-- call_grades, conversation_channels, sow_documents and generated_evals.
+-- eval_runs, criteria and the sow_* tables are described here but have never
+-- been created.
 
 -- ---------------------------------------------------------------
 -- conversations — one call handled by the AI helpdesk agent
@@ -228,24 +229,6 @@ CREATE TABLE IF NOT EXISTS eval_runs (
 );
 
 CREATE INDEX IF NOT EXISTS eval_runs_convo_idx ON eval_runs (conversation_id, started_at DESC);
-
--- ---------------------------------------------------------------
--- notifications — outbound alerts. dedupe_key stops re-notifying.
--- ---------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS notifications (
-  id            TEXT PRIMARY KEY,
-  deviation_id  TEXT        REFERENCES deviations(id) ON DELETE CASCADE,
-  channel       TEXT        NOT NULL DEFAULT 'teams',
-  title         TEXT        NOT NULL,
-  body          TEXT        NOT NULL DEFAULT '',
-  state         TEXT        NOT NULL DEFAULT 'pending',
-  dedupe_key    TEXT        NOT NULL UNIQUE,
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-  sent_at       TIMESTAMPTZ,
-  error_message TEXT
-);
-
-CREATE INDEX IF NOT EXISTS notifications_state_idx ON notifications (state);
 
 -- ---------------------------------------------------------------
 -- call_grades — the durable record of one call's AI grading

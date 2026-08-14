@@ -207,7 +207,7 @@ export function Overview({
 }: {
   onCounts?: (calls: number, open: number) => void;
   onOpenDeviation?: (deviationId: string) => void;
-  onNavigate?: (screen: 'ints' | 'scope' | 'patterns' | 'notify') => void;
+  onNavigate?: (screen: 'ints' | 'scope' | 'patterns') => void;
 }) {
   const [state, setState] = useState<Load>({ phase: 'loading' });
   const [nonce, setNonce] = useState(0);
@@ -998,17 +998,6 @@ export function Overview({
           <div style={{ fontSize: 13, marginTop: 4 }}>{criteriaCount} criteria active</div>
           <span onClick={() => onNavigate?.('scope')} className="hue-link" role="button" tabIndex={0} style={linkish}>
             Review criteria
-          </span>
-        </div>
-        <div>
-          <div style={kpiLabel}>Daily digest</div>
-          {/* Notifications is explicit that outbound delivery is not wired yet,
-              so this reports the queue rather than claiming a send time. */}
-          <div style={{ fontSize: 13, marginTop: 4 }}>
-            {v.open.length} queued · delivery not wired
-          </div>
-          <span onClick={() => onNavigate?.('notify')} className="hue-link" role="button" tabIndex={0} style={linkish}>
-            Change routing
           </span>
         </div>
         <div>

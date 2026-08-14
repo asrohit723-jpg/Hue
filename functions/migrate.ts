@@ -141,20 +141,6 @@ const STATEMENTS: string[] = [
      error_message TEXT
    )`,
   `CREATE INDEX IF NOT EXISTS eval_runs_convo_idx ON eval_runs (conversation_id, started_at DESC)`,
-
-  `CREATE TABLE IF NOT EXISTS notifications (
-     id TEXT PRIMARY KEY,
-     deviation_id TEXT REFERENCES deviations(id) ON DELETE CASCADE,
-     channel TEXT NOT NULL DEFAULT 'teams',
-     title TEXT NOT NULL,
-     body TEXT NOT NULL DEFAULT '',
-     state TEXT NOT NULL DEFAULT 'pending',
-     dedupe_key TEXT NOT NULL UNIQUE,
-     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-     sent_at TIMESTAMPTZ,
-     error_message TEXT
-   )`,
-  `CREATE INDEX IF NOT EXISTS notifications_state_idx ON notifications (state)`,
 ];
 
 // NOTE ON MIGRATIONS: there are none, and there cannot be. The app's database
@@ -264,10 +250,10 @@ server.addHandler({
     );
     db.query(`delete from conversations where ${target}`);
 
-    // Sweep orphans, including any predating this run. Only the four tables
-    // that actually exist are touched — `criteria`, `eval_runs` and
-    // `notifications` are declared in schema.sql but were never created, since
-    // the tables come from CSV import and `migrate up` cannot run.
+    // Sweep orphans, including any predating this run. Only the tables that
+    // actually exist are touched — `criteria` and `eval_runs` are declared in
+    // schema.sql but were never created, since the tables come from CSV import
+    // and `migrate up` cannot run.
     // Deviations first, then corrections — sweeping corrections while orphaned
     // deviations still exist makes those corrections look reachable, and they
     // are stranded again the moment their deviation goes.

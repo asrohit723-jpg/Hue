@@ -9,7 +9,6 @@ import { Interventions } from './Interventions';
 import { InterventionDetail } from './InterventionDetail';
 import { ScopeEvals } from './ScopeEvals';
 import { Patterns } from './Patterns';
-import { Notifications } from './Notifications';
 
 /**
  * Screens, matching the design's `screen` state values. Defined with the router
@@ -335,19 +334,6 @@ export function Shell({ me }: { me: CurrentUser }) {
             }
           />
 
-          <NavItem
-            label="Notifications"
-            active={screen === 'notify'}
-            onClick={() => setScreen('notify')}
-            iconBg="var(--ink-100)"
-            icon={
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--ink-600)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
-                <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
-              </svg>
-            }
-          />
-
         </div>
       </div>
 
@@ -573,7 +559,6 @@ export function Shell({ me }: { me: CurrentUser }) {
           )}
           {screen === 'patterns' && <Patterns onOpenDeviation={openDeviation} />}
           {screen === 'scope' && <ScopeEvals />}
-          {screen === 'notify' && <Notifications onOpen={openDeviation} />}
         </div>
       </div>
     </div>

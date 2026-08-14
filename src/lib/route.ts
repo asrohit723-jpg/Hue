@@ -22,8 +22,7 @@ export type ScreenId =
   | 'ints'
   | 'int'
   | 'patterns'
-  | 'scope'
-  | 'notify';
+  | 'scope';
 
 export interface Route {
   screen: ScreenId;
@@ -40,7 +39,6 @@ const SEGMENT: Record<ScreenId, string> = {
   int: 'interventions',
   patterns: 'patterns',
   scope: 'scope',
-  notify: 'notifications',
 };
 
 /** Which screen a segment means, with and without a record id. */
@@ -50,7 +48,6 @@ const SCREEN_OF: Record<string, { list: ScreenId; detail: ScreenId }> = {
   interventions: { list: 'ints', detail: 'int' },
   patterns: { list: 'patterns', detail: 'patterns' },
   scope: { list: 'scope', detail: 'scope' },
-  notifications: { list: 'notify', detail: 'notify' },
 };
 
 export const DEFAULT_ROUTE: Route = { screen: 'overview', id: null };
