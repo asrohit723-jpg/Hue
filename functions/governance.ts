@@ -2881,17 +2881,21 @@ server.addHandler({
     // select-then-write. Safe here: sandbox queries are serialized and this is
     // the only writer. A second approval finds the key already set and returns
     // the original record instead of writing again.
-    if (corr.applied_write_key) {
+    //
+    // ONLY WHEN THE WRITE ACTUALLY LANDED — hence both conditions. The key is
+    // claimed before the CMMS call, so a failed attempt used to leave it set
+    // with no record id, and every retry then reported alreadyApplied and wrote
+    // nothing. An approval that failed became one that could never be attempted
+    // again, while telling the caller it had succeeded. Observed on
+    // CO-DV-L-2512-CR-LOG-01, whose create threw on an unresolvable site.
+    if (corr.applied_write_key && corr.applied_record_id) {
       return {
         correctionId: corrId,
         state: corr.state,
-        appliedRecordId: corr.applied_record_id || null,
+        appliedRecordId: corr.applied_record_id,
         alreadyApplied: true,
       };
     }
-    const writeKey = `${corrId}:${corr.deviation_id}`;
-    db.query('update corrections set applied_write_key=$2 where id=$1', [corrId, writeKey]);
-
     const dev = db.query('select * from deviations where id = $1 limit 1', [corr.deviation_id])
       .rows[0];
     const convo = db.query('select * from conversations where id = $1 limit 1', [
@@ -2910,6 +2914,54 @@ server.addHandler({
     // silently writing nowhere.
     const plan = cmmsPlanFor(convo, action);
     const verb = plan.verb;
+
+    // ---- Everything that can be checked, checked BEFORE the key is claimed --
+    //
+    // The key is the idempotency guard, and claiming it commits this correction
+    // to one attempt. Claiming it and then discovering the write is impossible
+    // is how an approval becomes permanently unretryable.
+    let siteId: number | null = null;
+    if (verb === 'create') {
+      // The record the agent claimed but never made. The site is REQUIRED by
+      // create-service-request and is never invented — but it is looked for in
+      // more than one place, because a live call carries no site_hint at all
+      // (ingest leaves it empty; the channel does not report one) and reading
+      // only that field made create impossible for every live call.
+      const fields: any[] = Array.isArray(action.fields) ? action.fields : [];
+      const named = fields
+        .filter((f) => /site|building|location/i.test(String(f?.label ?? '')))
+        .map((f) => String(f?.value ?? '').trim())
+        .filter(Boolean)[0];
+      const hint = (named || String(convo?.site_hint ?? '')).trim().toLowerCase();
+
+      if (!hint) {
+        throw new Error(
+          'Cannot create: this call records no site, and the drafted fix names none. ' +
+            'A service request needs a site, and guessing one would put the request in the wrong building.',
+        );
+      }
+      const sitesPayload = await cmms('list-sites', { page_size: 200, page: 1 });
+      const sites = rowsOf(sitesPayload);
+      const exact = sites.filter((x: any) => String(x.name ?? '').trim().toLowerCase() === hint)[0];
+      // A contains-match only when it is UNAMBIGUOUS. Two candidates means the
+      // right answer is unknown, and one of two buildings is not a coin toss.
+      const near = sites.filter((x: any) =>
+        String(x.name ?? '').trim().toLowerCase().includes(hint),
+      );
+      const site = exact ?? (near.length === 1 ? near[0] : null);
+      if (!site) {
+        throw new Error(
+          near.length > 1
+            ? `Cannot create: "${named || convo?.site_hint}" matches ${near.length} sites in the CMMS. Refusing to guess between them.`
+            : `Cannot create: no CMMS site matches "${named || convo?.site_hint}". Refusing to guess a site.`,
+        );
+      }
+      siteId = Number(site.id);
+    }
+
+    // Only now, with the write known to be possible.
+    const writeKey = `${corrId}:${corr.deviation_id}`;
+    db.query('update corrections set applied_write_key=$2 where id=$1', [corrId, writeKey]);
 
     let appliedRecordId: string | null = null;
 
@@ -2980,18 +3032,6 @@ server.addHandler({
       });
       appliedRecordId = String(convo.cmms_sr_id);
     } else if (verb === 'create') {
-      // The record the agent claimed but never made. Site comes from the call's
-      // site hint resolved against the live site list — never invented.
-      const sitesPayload = await cmms('list-sites', { page_size: 200, page: 1 });
-      const hint = String(convo?.site_hint ?? '').trim().toLowerCase();
-      const site = rowsOf(sitesPayload).filter(
-        (s: any) => String(s.name ?? '').trim().toLowerCase() === hint,
-      )[0];
-      if (!site) {
-        throw new Error(
-          `Cannot create: no CMMS site matches the call's site "${convo?.site_hint}". Refusing to guess a site.`,
-        );
-      }
       const created = await cmms('create-service-request', {
         servicerequest: {
           subject: String(corr.title || 'Raised by Hue governance').slice(0, 255),
@@ -3001,7 +3041,9 @@ server.addHandler({
               0,
               2000,
             ),
-          site: { id: Number(site.id) },
+          // `site`, not `siteId` — the action's own description is explicit
+          // that responses may echo it under siteId but the input key is site.
+          site: { id: siteId },
           urgency: 'Urgent',
         },
       });
@@ -3890,6 +3932,10 @@ server.addHandler({
         proposedAt: row.proposed_at,
         appliedAt: row.applied_at,
         appliedRecordId: row.applied_record_id,
+        // Claimed BEFORE the CMMS write, so a key with no record id means an
+        // approval that started and did not finish — and, because a second
+        // approval short-circuits on this key, one that will never retry.
+        appliedWriteKey: String(row.applied_write_key ?? ''),
       },
       // What the write would actually do, decided here so the button cannot
       // promise something different from what the server will perform.

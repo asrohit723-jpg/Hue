@@ -766,6 +766,7 @@ export function InterventionDetail({
           rec={rec}
           plan={cmmsPlan}
           busy={act.busy}
+          act={act}
           onWrite={() =>
             run('approveCorrection', { correctionId: corr?.id ?? `CO-${dev.id}` }, 'approve')
           }
@@ -1294,6 +1295,7 @@ function FixTheRecord({
   rec,
   plan,
   busy,
+  act,
   onWrite,
 }: {
   dev: DeviationWithEvidence;
@@ -1302,6 +1304,8 @@ function FixTheRecord({
   /** Decided by the server from the JOIN, not by the proposer. */
   plan: { verb: string; recordId: string | null; reason: string } | null;
   busy: string | null;
+  /** So a failed write is visible HERE, next to the button that caused it. */
+  act: ActionState;
   onWrite: () => void;
 }) {
   const action = corr?.cmmsAction ?? null;
@@ -1420,6 +1424,51 @@ function FixTheRecord({
             )}
           </div>
         </div>
+
+        {/* What the write actually did. A CMMS write that failed used to report
+            nothing next to the button that ran it — the error surfaced in the
+            other panel, or nowhere, and the button simply looked idle again. */}
+        {act.error && !busy ? (
+          <div
+            style={{
+              fontSize: 12,
+              color: 'var(--danger-700)',
+              background: 'var(--danger-050)',
+              border: '1px solid var(--danger-500)',
+              borderRadius: 6,
+              padding: '9px 11px',
+              lineHeight: '18px',
+            }}
+          >
+            <b style={{ fontWeight: 600 }}>Nothing was written.</b> {act.error}
+          </div>
+        ) : null}
+
+        {applied && corr?.appliedRecordId ? (
+          <div
+            style={{
+              fontSize: 13,
+              color: 'var(--success-700)',
+              background: 'var(--success-050)',
+              border: '1px solid var(--success-400)',
+              borderRadius: 6,
+              padding: '10px 12px',
+              lineHeight: '19px',
+            }}
+          >
+            <b style={{ fontWeight: 600 }}>
+              SR-{corr.appliedRecordId} {verb === 'create' ? 'created' : 'updated'}
+            </b>
+            <div style={{ fontSize: 12, color: 'var(--ink-700)', marginTop: 4 }}>
+              {corr.title || 'Correction applied'}
+              {rec?.moduleState ? ` · ${String(rec.moduleState)}` : ''}
+              {rec?.urgency ? ` · ${String(rec.urgency)}` : ''}
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--ink-500)', marginTop: 3 }}>
+              Written through facilio-cmms.{verb}-service-request · logged against {dev.id}
+            </div>
+          </div>
+        ) : null}
 
         {/* ONE button, and the verb on it is the verb the server will run —
             both read the same join-derived plan, so it cannot offer to create a
