@@ -2210,13 +2210,129 @@ server.addHandler({
   },
 });
 
+
+// ---------------------------------------------------------------------------
+// Serial ids for hand-written evals
+//
+// GEN-CUS-001, GEN-CUS-002, … The GEN- prefix is what generatedCriterion gates
+// on, CUS marks it hand-written, and the seeded CR-* namespace is untouched —
+// so an id cannot collide across the three sources by construction.
+// ---------------------------------------------------------------------------
+
+/** Where the allocation lock lives. Same table and shape as the ingest lease. */
+const SERIAL_LEASE_ID = 'LEASE-eval-serial';
+const SERIAL_LEASE_TTL_MS = 15 * 1000;
+
+/**
+ * Take the allocation lock.
+ *
+ * "Read the max, add one" is select-then-write, and this database has no unique
+ * index and no sequences. Two people saving at the same moment would both read
+ * 003 and both write 004 — and since generatedCriterion resolves with LIMIT 1,
+ * one of those two criteria would silently never grade. A criterion that looks
+ * saved and never runs is exactly the failure this app exists to catch.
+ *
+ * THE LOCK MUST SPAN THE INSERT, not just the read. Releasing it after reading
+ * the max and before writing the row leaves the next caller reading a max that
+ * does not yet include the number just handed out — which is a collision with
+ * extra steps, and is what an earlier version of this did. Measured: three
+ * concurrent saves, two of them got GEN-CUS-004.
+ *
+ * The TTL is short because what it guards is a handful of synchronous queries;
+ * a lease older than that belongs to a run that died mid-write.
+ */
+function acquireSerialLease(db: any): string {
+  const stamp = (msAgo = 0) =>
+    new Date(Date.now() - msAgo).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const by = `serial-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+
+  const existing = db.query('select id from call_grades where id = $1 limit 1', [SERIAL_LEASE_ID])
+    .rows[0];
+  if (!existing) {
+    db.query(
+      `insert into call_grades (id, conversation_id, claimed_at, claimed_by, graded_at, graded_by,
+                                applicable, response_quality, schema_version)
+       values ($1,'__lease__','','','','','',null,1)`,
+      [SERIAL_LEASE_ID],
+    );
+  }
+
+  // The sandbox has no timers, so the wait is a spin. What it guards is a few
+  // synchronous queries, so the window it spins over is microseconds.
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const { rows } = db.query(
+      `update call_grades set claimed_at = $2, claimed_by = $3
+        where id = $1 and (claimed_at is null or claimed_at = '' or claimed_at < $4)
+       returning id`,
+      [SERIAL_LEASE_ID, stamp(), by, stamp(SERIAL_LEASE_TTL_MS)],
+    );
+    if (rows.length) return by;
+  }
+  throw new Error('Could not allocate an eval id — another save is holding the lock. Try again.');
+}
+
+function releaseSerialLease(db: any, by: string) {
+  db.query(`update call_grades set claimed_at = '', claimed_by = '' where id = $1 and claimed_by = $2`, [
+    SERIAL_LEASE_ID,
+    by,
+  ]);
+}
+
+/**
+ * The next serial. Only correct while the lease above is held.
+ *
+ * Scans the ids that exist rather than keeping a counter: a counter and the
+ * rows it numbers are two things to keep in step, and the rows are the truth.
+ * Ids that predate serials — derived from a title — are left alone, since
+ * deviations already reference them; the counter starts above the numbers.
+ */
+function nextCustomSerial(db: any): string {
+  const rows = db.query(
+    `select criterion_id from generated_evals
+      where id <> '__seed__' and criterion_id like 'GEN-CUS-%'`,
+  ).rows;
+
+  let max = 0;
+  for (const r of rows) {
+    const m = /^GEN-CUS-(\d+)$/.exec(String(r.criterion_id ?? ''));
+    if (m) max = Math.max(max, Number(m[1]) || 0);
+  }
+  return `GEN-CUS-${String(max + 1).padStart(3, '0')}`;
+}
+
+
+server.addHandler({
+  name: 'retireCustomEval',
+  description:
+    "Stop a hand-written eval from grading. Sets active='false' rather than deleting: a criterion that produced findings should still be resolvable from those findings, and this table has no way back once a row is gone.",
+  parameters: { criterionId: { description: 'The eval to retire', type: 'string' } },
+  execute: async (args) => {
+    const db = connect();
+    const criterionId = String(args.criterionId ?? '').trim();
+
+    // Only hand-written evals. A generated one belongs to its scope of work and
+    // is retired by regenerating, not by hand — otherwise the two disagree
+    // about what that version of the SOW produced.
+    const row = db.query(
+      `select id, title from generated_evals
+        where id <> '__seed__' and criterion_id = $1 and generated_by = 'manual' limit 1`,
+      [criterionId],
+    ).rows[0];
+    if (!row) {
+      throw new Error(`No hand-written eval ${criterionId}. Generated evals are retired by regenerating.`);
+    }
+
+    db.query(`update generated_evals set active = 'false' where id = $1`, [row.id]);
+    return { criterionId, title: String(row.title ?? ''), retired: true };
+  },
+});
+
 server.addHandler({
   name: 'saveCustomEval',
   description:
     "Add a criterion written by hand. Stored beside the generated ones and graded like them, but marked manual so a regeneration never sweeps it away and a change to the scope of work never unbinds it.",
   parameters: {
     title: { description: 'Short name for the check', type: 'string' },
-    clauseRef: { description: 'Clause this comes from, or blank', type: 'string' },
     description: { description: 'What it requires', type: 'string' },
     passDefinition: { description: 'Exactly what must be observable to PASS', type: 'string' },
     failDefinition: { description: 'Exactly what makes it FAIL', type: 'string' },
@@ -2239,16 +2355,14 @@ server.addHandler({
       throw new Error('Rejected: state both what passes and what fails — a criterion with one side is not testable.');
     }
 
-    // Derived from the title so re-adding the same criterion UPDATES rather
-    // than quietly creating a second one that grades the same thing twice.
-    const slug = title
-      .toUpperCase()
-      .replace(/[^A-Z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 24) || 'EVAL';
-    // One namespace with the generated evals, because generatedCriterion gates
-    // on this prefix and a second prefix is a second thing to keep in step.
-    const criterionId = `GEN-CUS-${slug}`.slice(0, 40).replace(/-+$/, '');
+    // Allocated, not derived: the writer supplies a title and definitions, and
+    // the id is this app's business. Every save is therefore a NEW criterion —
+    // there is no title to match on any more, which is what a serial means.
+    //
+    // The lease is taken HERE and released only after the row exists, so the
+    // next caller reads a max that includes this number.
+    const lease = acquireSerialLease(db);
+    const criterionId = nextCustomSerial(db);
 
     const LAYERS = ['deterministic', 'semantic'];
     const SEVERITIES = ['critical', 'high', 'medium', 'low'];
@@ -2270,7 +2384,10 @@ server.addHandler({
       // ignores it for manual evals, which are not derived from that text.
       sow ? String(sow.fingerprint ?? '') : '',
       criterionId,
-      String(args.clauseRef ?? '').trim() || '—',
+      // The serial stands in the clause slot. A custom eval cites no clause of
+      // the scope of work, and printing something like "S-9.9" there would be a
+      // reference to a clause that does not exist.
+      criterionId,
       title,
       String(args.description ?? '').trim(),
       pass,
@@ -2287,19 +2404,7 @@ server.addHandler({
       '',
     ];
 
-    const existing = db.query('select id from generated_evals where id = $1 limit 1', [id]).rows[0];
-    if (existing) {
-      db.query(
-        `update generated_evals set
-           sow_id=$2, sow_fingerprint=$3, criterion_id=$4, clause_ref=$5, title=$6,
-           description=$7, pass_definition=$8, fail_definition=$9, layer=$10,
-           check_type=$11, severity=$12, modality=$13, active=$14, approved=$15,
-           approved_by=$16, generated_at=$17, generated_by=$18, source_excerpt=$19,
-           schema_version=1
-         where id=$1`,
-        [id, ...values],
-      );
-    } else {
+    try {
       db.query(
         `insert into generated_evals
            (id, sow_id, sow_fingerprint, criterion_id, clause_ref, title, description,
@@ -2309,12 +2414,15 @@ server.addHandler({
          values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,1)`,
         [id, ...values],
       );
+    } finally {
+      // Released only now. Releasing after reading the max and before writing
+      // the row is what let two concurrent saves both take GEN-CUS-004.
+      releaseSerialLease(db, lease);
     }
 
     return {
       criterionId,
       id,
-      updated: Boolean(existing),
       // Only a semantic eval reaches a judge; a deterministic one has no code.
       runnable: layer === 'semantic',
     };

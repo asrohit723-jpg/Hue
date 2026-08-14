@@ -115,7 +115,7 @@ export function ScopeEvals() {
    * themselves should not disappear because the contract was reworded.
    */
   async function saveEval(form: {
-    title: string; clauseRef: string; description: string;
+    title: string; description: string;
     passDefinition: string; failDefinition: string;
     severity: string; layer: string; modality: string;
   }) {
@@ -972,13 +972,12 @@ function NewEval({
   error: string | null;
   onCancel: () => void;
   onSave: (f: {
-    title: string; clauseRef: string; description: string;
+    title: string; description: string;
     passDefinition: string; failDefinition: string;
     severity: string; layer: string; modality: string;
   }) => void;
 }) {
   const [title, setTitle] = useState('');
-  const [clauseRef, setClauseRef] = useState('');
   const [description, setDescription] = useState('');
   const [passDefinition, setPass] = useState('');
   const [failDefinition, setFail] = useState('');
@@ -1007,21 +1006,21 @@ function NewEval({
       </div>
 
       <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,2fr) minmax(0,1fr)', gap: 12 }}>
-          <div>
-            <label style={lbl}>Title</label>
-            <input
-              className="hue-field"
-              style={field}
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="Callback promised is logged"
-              autoFocus
-            />
-          </div>
-          <div>
-            <label style={lbl}>Clause ref</label>
-            <input className="hue-field" style={field} value={clauseRef} onChange={(e) => setClauseRef(e.target.value)} placeholder="S-2.6" />
+        <div>
+          <label style={lbl}>Title</label>
+          <input
+            className="hue-field"
+            style={field}
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Callback promised is logged"
+            autoFocus
+          />
+          {/* The id is this app's business, not something to ask for. A custom
+              eval cites no clause of the scope of work, so asking for one
+              invites a reference to a clause that does not exist. */}
+          <div style={{ fontSize: 11, color: 'var(--ink-500)', marginTop: 5 }}>
+            An id is assigned on save — GEN-CUS-001, GEN-CUS-002, and so on.
           </div>
         </div>
 
@@ -1082,7 +1081,7 @@ function NewEval({
           <button
             className="hue-btn"
             disabled={!ready || busy}
-            onClick={() => onSave({ title, clauseRef, description, passDefinition, failDefinition, severity, layer, modality })}
+            onClick={() => onSave({ title, description, passDefinition, failDefinition, severity, layer, modality })}
             style={{
               height: 36, padding: '0 16px', borderRadius: 6,
               border: `1px solid ${ready && !busy ? 'var(--blue-500)' : 'var(--border-default)'}`,

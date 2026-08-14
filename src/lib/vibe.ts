@@ -595,7 +595,7 @@ export const api = {
    * to the scope of work never unbinds it.
    */
   saveCustomEval: (a: {
-    title: string; clauseRef: string; description: string;
+    title: string; description: string;
     passDefinition: string; failDefinition: string;
     severity: string; layer: string; modality: string; savedBy: string;
   }) =>
