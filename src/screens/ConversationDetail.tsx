@@ -90,6 +90,26 @@ const railHead: React.CSSProperties = {
   alignItems: 'center',
   gap: 8,
 };
+/**
+ * One shape for every pill in the header.
+ *
+ * Fixed height and no shrinking: the pills used to size themselves off their
+ * own text next to 36px buttons, so "Grading unavailable" and "Flagged" sat at
+ * different heights and the row read as broken.
+ */
+const statusPill: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  height: 26,
+  padding: '0 11px',
+  borderRadius: 999,
+  fontSize: 12,
+  fontWeight: 600,
+  whiteSpace: 'nowrap',
+  flex: '0 0 auto',
+};
+
 const microLabel: React.CSSProperties = {
   fontSize: 11,
   letterSpacing: '.04em',
@@ -385,30 +405,55 @@ export function ConversationDetail({
 
   return (
     <div style={page('22px 32px 40px')}>
+      {/* Getting out of a record should not require noticing that a word in a
+          breadcrumb happens to be clickable. This is a button, it looks like
+          one, and it says where it goes. The id stays beside it as context. */}
       <div
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: 8,
+          gap: 10,
           fontSize: 13,
           color: 'var(--ink-600)',
-          marginBottom: 12,
+          marginBottom: 14,
         }}
       >
-        <span
+        <button
+          className="hue-btn"
           onClick={onBack}
-          className="hue-link"
-          role="button"
-          tabIndex={0}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') (onBack)();
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 7,
+            height: 32,
+            padding: '0 12px 0 10px',
+            borderRadius: 6,
+            border: '1px solid var(--border-default)',
+            background: '#fff',
+            color: 'var(--ink-900)',
+            fontSize: 13,
+            fontWeight: 500,
+            cursor: 'pointer',
+            whiteSpace: 'nowrap',
           }}
-          style={{ cursor: 'pointer', color: 'var(--blue-500)', fontWeight: 500 }}
         >
-          Conversations
-        </span>
-        <span>/</span>
-        <span>{c.callId}</span>
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.9"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <line x1="19" y1="12" x2="5" y2="12" />
+            <polyline points="12 19 5 12 12 5" />
+          </svg>
+          Back to conversations
+        </button>
+        <span style={{ color: 'var(--ink-500)' }}>{c.callId}</span>
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 18 }}>
@@ -460,59 +505,65 @@ export function ConversationDetail({
             {gradeSummary && (
               <span style={{ color: 'var(--blue-600)', fontWeight: 500 }}> · {gradeSummary}</span>
             )}
+            {/* Short on purpose. The status pill and its detail line to the
+                right now say where the call is; a second, longer telling of it
+                here was what pushed that cluster into the corner. */}
             {!gradeSummary && c.evalStatus === 'not_evaluated' && (
               <span style={{ color: 'var(--ink-500)' }}>
                 {' '}·{' '}
                 {data.grading?.status === 'grading'
-                  ? 'the checks are running now — this updates on its own'
-                  : 'the checks run automatically when a call arrives; Run evals adds the AI analysis'}
+                  ? 'updating on its own'
+                  : 'Run evals adds the AI analysis'}
               </span>
             )}
           </p>
         </div>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
-          {/* Stage first, verdict second. A call that has never been graded and
-              one whose grading run died are different situations, and the old
-              single badge said "Awaiting grading" for both. */}
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
-            <span
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                fontSize: 12,
-                fontWeight: 600,
-                padding: '4px 11px',
-                borderRadius: 999,
-                background: gt.bg,
-                color: gt.fg,
-              }}
-            >
+        {/* Two rows, not one.
+            The status detail is variable-length prose; sitting it BETWEEN
+            fixed-width pills and 36px buttons is what made this area cramp and
+            read as broken. It now has its own line underneath, and everything
+            on the top row is a fixed-height, non-shrinking element. */}
+        <div
+          style={{
+            marginLeft: 'auto',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'flex-end',
+            gap: 8,
+            minWidth: 0,
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'flex-end',
+              gap: 10,
+              flexWrap: 'wrap',
+            }}
+          >
+            {/* Stage first, verdict second. A call that has never been graded
+                and one whose grading run died are different situations, and the
+                old single badge said "Awaiting grading" for both. */}
+            <span style={{ ...statusPill, background: gt.bg, color: gt.fg }}>
               {grading || data.grading?.status === 'grading' ? (
-                <span className="hue-spinner" aria-hidden="true" style={{ width: 10, height: 10, flex: '0 0 10px', borderWidth: 1.5 }} />
+                <span
+                  className="hue-spinner"
+                  aria-hidden="true"
+                  style={{ width: 10, height: 10, flex: '0 0 10px', borderWidth: 1.5 }}
+                />
               ) : null}
               {/* A run happening in THIS tab is the most accurate thing we
                   know — it beats a status polled a moment ago. */}
-              {grading ? `Grading ${gradedSoFar} of ${SEMANTIC_CRITERIA.length}…` : gradingLabel(data.grading)}
+              {grading
+                ? `Grading ${gradedSoFar} of ${SEMANTIC_CRITERIA.length}…`
+                : gradingLabel(data.grading)}
             </span>
-            <span style={{ fontSize: 11, color: 'var(--ink-500)' }}>
-              {grading ? grading : gradingDetail(data.grading)}
-            </span>
-          </div>
-          {c.evalStatus !== 'not_evaluated' ? (
-            <span
-              style={{
-                fontSize: 12,
-                fontWeight: 600,
-                padding: '4px 11px',
-                borderRadius: 999,
-                background: ev.bg,
-                color: ev.fg,
-              }}
-            >
-              {label(c.evalStatus)}
-            </span>
-          ) : null}
+            {c.evalStatus !== 'not_evaluated' ? (
+              <span style={{ ...statusPill, background: ev.bg, color: ev.fg }}>
+                {label(c.evalStatus)}
+              </span>
+            ) : null}
           {/* Grading is a deliberate act, not a side effect of opening a call —
               the count and the compliance score must hold still while browsing. */}
           <button className="hue-btn"
@@ -567,6 +618,24 @@ export function ConversationDetail({
               Open intervention
             </button>
           )}
+          </div>
+
+          {/* The status detail, on its own line. Right-aligned under the pill
+              it describes, capped so a long reason wraps instead of stretching
+              the header, and simply absent when there is nothing to say. */}
+          {(grading ? grading : gradingDetail(data.grading)) ? (
+            <span
+              style={{
+                fontSize: 11,
+                color: 'var(--ink-500)',
+                textAlign: 'right',
+                maxWidth: 460,
+                lineHeight: '16px',
+              }}
+            >
+              {grading ? grading : gradingDetail(data.grading)}
+            </span>
+          ) : null}
         </div>
       </div>
 

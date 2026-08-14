@@ -3,7 +3,10 @@ import { api, type ConversationView } from '../lib/vibe';
 import { BootSkeleton } from './BootSkeleton';
 import { LoadError } from '../components/Chrome';
 import { avatarColor, clock, duration, evalTone, initials, label, sentimentTone } from '../lib/tone';
-import { gradingLabel, gradingTone, inFlight } from '../lib/grading';
+// `inFlight` only — the grading STAGE is shown on the conversation record, not
+// here. It still drives the poll below, which refreshes the result cell when a
+// call finishes grading.
+import { inFlight } from '../lib/grading';
 import { channelLabel, channelTone } from '../lib/channel';
 import { page } from '../lib/layout';
 
@@ -21,10 +24,7 @@ import { page } from '../lib/layout';
 const FILTERS = ['All calls', 'Flagged', 'Passed', 'No SR created'] as const;
 type Filter = (typeof FILTERS)[number];
 
-// The first column carries two lines now — the grading stage and, once there
-// is one, the verdict — so it needs a little more room than the old single
-// "Result" label did.
-const COLS = '132px minmax(240px,2fr) 130px 104px 74px 24px';
+const COLS = '104px minmax(240px,2fr) 130px 104px 74px 24px';
 
 const headCell: React.CSSProperties = {
   fontSize: 11,
@@ -404,7 +404,7 @@ export function Conversations({
               ...headCell,
             }}
           >
-            <span>Grading</span>
+            <span>Result</span>
             <span>Caller</span>
             <span>Outcome</span>
             <span>Sentiment</span>
@@ -445,7 +445,6 @@ export function Conversations({
 
 function CallRow({ c, onOpen }: { c: ConversationView; onOpen: () => void }) {
   const ev = evalTone(c.evalStatus);
-  const g = gradingTone(c.grading);
   const ct = channelTone(c.channel);
   const sent = sentimentTone(c.sentiment);
   // Live call logs usually have no caller name, so this is the phone number.
@@ -474,42 +473,27 @@ function CallRow({ c, onOpen }: { c: ConversationView; onOpen: () => void }) {
         background: '#fff',
       }}
     >
-      {/* Where the call IS, then what grading found. Two different questions,
-          and collapsing them used to hide the first: a call that had never been
-          graded and one whose grading died both read as "Awaiting grading". */}
-      <div style={{ minWidth: 0 }}>
+      {/* The RESULT, and only the result. Where a call is in grading belongs
+          on the record itself, not on every row of the list — the stage is
+          transient and the list is for scanning outcomes. The poll above still
+          refreshes this cell the moment a call finishes grading. */}
+      <span
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          fontSize: 11,
+          fontWeight: 600,
+          textTransform: 'uppercase',
+          letterSpacing: '.03em',
+          color: ev.fg,
+        }}
+      >
         <span
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            fontSize: 11,
-            fontWeight: 600,
-            textTransform: 'uppercase',
-            letterSpacing: '.03em',
-            color: g.fg,
-          }}
-        >
-          {c.grading?.status === 'grading' ? (
-            <span className="hue-spinner" style={{ width: 9, height: 9, flex: '0 0 9px', borderWidth: 1.5 }} />
-          ) : (
-            <span
-              style={{ width: 7, height: 7, borderRadius: 999, background: g.fg, flex: '0 0 7px' }}
-            />
-          )}
-          {gradingLabel(c.grading)}
-        </span>
-        {/* The verdict, once there is one. Kept under the status rather than
-            replacing it — "Flagged" is the outcome, not the stage. */}
-        {c.grading?.status === 'graded' && c.evalStatus !== 'not_evaluated' ? (
-          <span style={{ display: 'block', fontSize: 11, color: ev.fg, marginTop: 2 }}>
-            {label(c.evalStatus)}
-            {c.grading.criteriaUnavailable > 0
-              ? ` · ${c.grading.criteriaUnavailable} unreachable`
-              : ''}
-          </span>
-        ) : null}
-      </div>
+          style={{ width: 7, height: 7, borderRadius: 999, background: ev.fg, flex: '0 0 7px' }}
+        />
+        {c.evalStatus === 'not_evaluated' ? 'Awaiting grading' : label(c.evalStatus)}
+      </span>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 11, minWidth: 0 }}>
         <span
