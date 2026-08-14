@@ -1780,6 +1780,121 @@ server.addHandler({
 });
 
 server.addHandler({
+  name: 'callAnalysisContext',
+  description:
+    'Everything the browser needs to analyse ONE call: the full transcript, the live CMMS record it resolved to, and the active SOW criteria. No model call — fast.',
+  parameters: { conversationId: { description: 'Conversation id', type: 'string' } },
+  execute: async (args) => {
+    const db = connect();
+    const convoId = String(args.conversationId ?? '').trim();
+    const convo = db.query('select * from conversations where id = $1 limit 1', [convoId]).rows[0];
+    if (!convo) throw new Error(`No conversation ${convoId}`);
+
+    const turns = db.query(
+      'select * from transcript_turns where conversation_id = $1 order by turn_index',
+      [convoId],
+    ).rows;
+
+    let cmmsRecord: any = null;
+    if (convo.cmms_sr_id) {
+      const payload = await cmms('list-service-requests', {
+        page_size: 1,
+        page: 1,
+        expand: 'site,requester',
+        filters: `id(equals)=${convo.cmms_sr_id}`,
+      });
+      const r = rowsOf(payload)[0] ?? null;
+      cmmsRecord = r
+        ? {
+            id: r.id,
+            subject: r.subject,
+            description: r.description,
+            site: r.site?.name ?? null,
+            urgency: r.urgency ?? null,
+            status: r.moduleState ?? null,
+          }
+        : null;
+    }
+
+    // The criteria the engine actually grades — the same list the judges use, so
+    // the analyst cites ids that exist and are enforced rather than inventing a
+    // rule the SOW does not contain.
+    const criteria = Object.keys(SEMANTIC_CRITERIA).map((id) => ({
+      id,
+      clauseRef: SEMANTIC_CRITERIA[id].clauseRef,
+      requires: SEMANTIC_CRITERIA[id].requires,
+    }));
+
+    return {
+      conversationId: convoId,
+      transcript: turns.map((t: any) => ({
+        performer: t.performer,
+        at: t.at_offset,
+        message: t.message,
+      })),
+      cmmsRecord,
+      criteria,
+      // What the channel's own model concluded, so the analyst can reconcile
+      // rather than contradict it.
+      channelSentiment: convo.sentiment || null,
+      srClaimed: asBool(convo.sr_claimed),
+      durationSec: Number(convo.duration_sec) || null,
+    };
+  },
+});
+
+server.addHandler({
+  name: 'saveCallAnalysis',
+  description:
+    'Persist the one field of a call analysis that has a column: the response-quality score. Validates before writing. The prose has nowhere to live yet and is deliberately not stored.',
+  parameters: {
+    conversationId: { description: 'Conversation id', type: 'string' },
+    applicable: { description: '1 when the call could be judged, 0 when too thin', type: 'number' },
+    responseQuality: { description: '0-100', type: 'number' },
+    sentiment: { description: 'happy | neutral | frustrated | distressed | unknown', type: 'string' },
+  },
+  execute: async (args) => {
+    const db = connect();
+    const convoId = String(args.conversationId ?? '').trim();
+    const convo = db.query('select * from conversations where id = $1 limit 1', [convoId]).rows[0];
+    if (!convo) throw new Error(`No conversation ${convoId}`);
+
+    const applicable = Number(args.applicable) === 1;
+    let scoreWritten: number | null = null;
+
+    if (applicable) {
+      const q = Number(args.responseQuality);
+      if (!Number.isFinite(q) || q < 0 || q > 100) {
+        throw new Error(`Rejected: responseQuality must be 0-100, got "${args.responseQuality}"`);
+      }
+      db.query('update conversations set quality_score=$2 where id=$1', [convoId, Math.round(q)]);
+      scoreWritten = Math.round(q);
+    }
+    // Not applicable writes nothing. A call too thin to judge keeps quality_score
+    // at 0, which the UI reads as "not scored" — never a real low score.
+
+    // Sentiment: the CHANNEL is authoritative. The analyst's reading only fills
+    // a gap, never overwrites a value the channel supplied — a disagreement is
+    // shown to the user, not silently resolved here.
+    const incoming = String(args.sentiment ?? '').trim();
+    const valid = ['happy', 'neutral', 'frustrated', 'distressed'];
+    let sentimentWritten: string | null = null;
+    if (!String(convo.sentiment ?? '').trim() && valid.indexOf(incoming) >= 0) {
+      db.query('update conversations set sentiment=$2 where id=$1', [convoId, incoming]);
+      sentimentWritten = incoming;
+    }
+
+    return {
+      conversationId: convoId,
+      scoreWritten,
+      sentimentWritten,
+      channelSentiment: convo.sentiment || null,
+      note: 'Justification, sentiment reason and overall assessment are not persisted — no column exists for them.',
+    };
+  },
+});
+
+server.addHandler({
   name: 'patternContext',
   description:
     'Everything the browser needs to propose ONE fix for a whole pattern: every occurrence of a criterion across calls, with its evidence and whether the CMMS record was there. No model call — fast.',

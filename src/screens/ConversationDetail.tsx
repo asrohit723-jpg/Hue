@@ -5,7 +5,7 @@ import {
   type DeviationWithEvidence,
   type TurnWithToolIO,
 } from '../lib/vibe';
-import { runSemanticCriterion, SEMANTIC_CRITERIA } from '../lib/judges';
+import { runSemanticCriterion, runCallAnalysis, SEMANTIC_CRITERIA, type CallAnalysis } from '../lib/judges';
 import { BootSkeleton } from './BootSkeleton';
 import { LoadError } from '../components/Chrome';
 import criteriaSeed from '../../evals/criteria.seed.json';
@@ -178,6 +178,8 @@ export function ConversationDetail({
   const [tab, setTab] = useState<QualityTab>('score');
   const [grading, setGrading] = useState<string | null>(null);
   const [gradeSummary, setGradeSummary] = useState<string | null>(null);
+  const [analysis, setAnalysis] = useState<CallAnalysis | null>(null);
+  const [analysisChannelSentiment, setAnalysisChannelSentiment] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -185,6 +187,7 @@ export function ConversationDetail({
       setData(null);
       setError(null);
       setGradeSummary(null);
+      setAnalysis(null);
       try {
         const res = await api.getConversation(id);
         if (cancelled) return;
@@ -219,6 +222,15 @@ export function ConversationDetail({
         setGrading(criterionId);
         runs.push(await runSemanticCriterion(id, criterionId));
       }
+      // The call analysis is the last step of the same deliberate action, so a
+      // score and its reasoning arrive with the verdicts rather than on open.
+      setGrading('call analysis');
+      const an = await runCallAnalysis(id);
+      if (an.ok && an.analysis) {
+        setAnalysis(an.analysis);
+        setAnalysisChannelSentiment(an.channelSentiment ?? null);
+      }
+
       const failed = runs.filter((r) => r.verdict === 'fail').length;
       const retracted = runs.filter((r) => r.retracted).length;
       const unavailable = runs.filter((r) => r.verdict === 'unavailable').length;
@@ -227,6 +239,11 @@ export function ConversationDetail({
           `${runs.length - unavailable} of ${runs.length} criteria graded`,
           failed ? `${failed} failed` : 'none failed',
           retracted ? `${retracted} retracted` : null,
+          an.ok
+            ? an.analysis?.applicable
+              ? `quality ${an.analysis.responseQuality}`
+              : 'not scorable'
+            : 'analysis unavailable',
           // A judge that never answered is UNKNOWN, never a pass — say so.
           unavailable ? `${unavailable} could not be reached` : null,
         ]
@@ -556,6 +573,8 @@ export function ConversationDetail({
             deviations={deviations}
             tab={tab}
             onTab={setTab}
+            analysis={analysis}
+            analysisChannelSentiment={analysisChannelSentiment}
           />
         </div>
       </div>
@@ -657,11 +676,15 @@ function QualityCard({
   deviations,
   tab,
   onTab,
+  analysis,
+  analysisChannelSentiment,
 }: {
   conversation: ConversationView;
   deviations: DeviationWithEvidence[];
   tab: QualityTab;
   onTab: (t: QualityTab) => void;
+  analysis: CallAnalysis | null;
+  analysisChannelSentiment: string | null;
 }) {
   const ev = evalTone(c.evalStatus);
   const failedBy = new Map(deviations.map((d) => [d.criterionId, d]));
@@ -698,7 +721,7 @@ function QualityCard({
         ))}
       </div>
 
-      {tab === 'score' && <ScoreTab conversation={c} />}
+      {tab === 'score' && <ScoreTab conversation={c} analysis={analysis} />}
       {tab === 'eval' && (
         <EvalTab
           failedBy={failedBy}
@@ -707,7 +730,9 @@ function QualityCard({
           failedCount={deviations.length}
         />
       )}
-      {tab === 'sentiment' && <SentimentTab conversation={c} />}
+      {tab === 'sentiment' && (
+        <SentimentTab conversation={c} analysis={analysis} channelSentiment={analysisChannelSentiment} />
+      )}
     </div>
   );
 }
@@ -720,19 +745,28 @@ function QualityCard({
  * ever been written. The design hardcodes 88 / 94 / 91; those numbers describe
  * nothing, so each row keeps its meter and reports that it was not measured.
  */
-function ScoreTab({ conversation: c }: { conversation: ConversationView }) {
+function ScoreTab({
+  conversation: c,
+  analysis,
+}: {
+  conversation: ConversationView;
+  analysis: CallAnalysis | null;
+}) {
+  // A score just produced by Run evals beats the stored one, which is a run old.
+  const live = analysis?.applicable ? (analysis.responseQuality ?? null) : null;
+  const score = live ?? (c.qualityScore && c.qualityScore > 0 ? c.qualityScore : null);
   const rows = [
     { label: 'Latency', value: null as number | null, display: 'not measured' },
     { label: 'Speech-to-text accuracy', value: null as number | null, display: 'not measured' },
     { label: 'Text-to-speech quality', value: null as number | null, display: 'not measured' },
     {
       label: 'Response quality',
-      value: c.qualityScore && c.qualityScore > 0 ? c.qualityScore : null,
-      display: c.qualityScore && c.qualityScore > 0 ? `${c.qualityScore} / 100` : 'not scored',
+      value: score,
+      display: score !== null ? `${score} / 100` : analysis && !analysis.applicable ? 'not applicable' : 'not scored',
     },
   ];
 
-  const overall = c.qualityScore && c.qualityScore > 0 ? String(c.qualityScore) : '—';
+  const overall = score !== null ? String(score) : '—';
 
   return (
     <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -783,9 +817,71 @@ function ScoreTab({ conversation: c }: { conversation: ConversationView }) {
           </div>
         </div>
       ))}
+      {analysis && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 2 }}>
+          {analysis.responseQualityJustification && (
+            <div style={{ fontSize: 12, color: 'var(--ink-700)', lineHeight: '18px' }}>
+              {analysis.responseQualityJustification}
+            </div>
+          )}
+          {analysis.overallAssessment && (
+            <div>
+              <div style={microLabel}>Overall assessment</div>
+              <p
+                style={{
+                  margin: '4px 0 0',
+                  fontSize: 13,
+                  color: 'var(--ink-900)',
+                  lineHeight: '19px',
+                  textWrap: 'pretty',
+                }}
+              >
+                {analysis.overallAssessment}
+              </p>
+            </div>
+          )}
+          {(analysis.criteriaSatisfied?.length || analysis.criteriaBreached?.length) && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+              {(analysis.criteriaBreached ?? []).map((id) => (
+                <span
+                  key={'b' + id}
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 600,
+                    padding: '2px 8px',
+                    borderRadius: 999,
+                    background: 'var(--danger-050)',
+                    color: 'var(--danger-700)',
+                  }}
+                >
+                  ✕ {id}
+                </span>
+              ))}
+              {(analysis.criteriaSatisfied ?? []).map((id) => (
+                <span
+                  key={'s' + id}
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 600,
+                    padding: '2px 8px',
+                    borderRadius: 999,
+                    background: 'var(--success-050)',
+                    color: 'var(--success-700)',
+                  }}
+                >
+                  ✓ {id}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       <p style={{ margin: 0, fontSize: 11, color: 'var(--ink-500)', lineHeight: '16px' }}>
-        Latency, speech-to-text and text-to-speech are not captured by the call channel yet, so
-        they are shown unmeasured rather than estimated.
+        {/* These three describe the audio pipeline, which no transcript can show.
+            The analyst is instructed to refuse them rather than estimate. */}
+        Latency, speech-to-text and text-to-speech are properties of the audio, which Hue never
+        hears — they stay unmeasured rather than estimated.
+        {!analysis && ' Run evals to score response quality.'}
       </p>
     </div>
   );
@@ -920,7 +1016,21 @@ function EvalTab({
  * satisfaction level for the whole call. The strip stays, as a single band of
  * that one real value, captioned for what it is.
  */
-function SentimentTab({ conversation: c }: { conversation: ConversationView }) {
+function SentimentTab({
+  conversation: c,
+  analysis,
+  channelSentiment,
+}: {
+  conversation: ConversationView;
+  analysis: CallAnalysis | null;
+  channelSentiment: string | null;
+}) {
+  // The channel's reading is authoritative for the badge. The analyst explains,
+  // and where the two disagree BOTH are shown — a contradiction between the
+  // upstream signal and the transcript is a finding, not something to smooth over.
+  const channel = channelSentiment ?? c.sentiment ?? null;
+  const read = analysis?.sentiment && analysis.sentiment !== 'unknown' ? analysis.sentiment : null;
+  const disagree = Boolean(channel && read && channel !== read);
   const tone = sentimentTone(c.sentiment);
   const band = c.sentiment
     ? c.sentiment === 'happy'
@@ -964,9 +1074,42 @@ function SentimentTab({ conversation: c }: { conversation: ConversationView }) {
         <span>0:00</span>
         <span>{duration(c.durationSec)}</span>
       </div>
+      {analysis && read && (
+        <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {disagree ? (
+            <div
+              style={{
+                background: 'var(--warning-050)',
+                border: '1px solid var(--warning-500)',
+                borderRadius: 6,
+                padding: '9px 11px',
+                fontSize: 12,
+                color: 'var(--warning-700)',
+                lineHeight: '18px',
+              }}
+            >
+              <b style={{ fontWeight: 600 }}>These disagree.</b> The channel recorded{' '}
+              <b style={{ fontWeight: 600 }}>{label(channel ?? '')}</b>; reading the transcript
+              gives <b style={{ fontWeight: 600 }}>{label(read)}</b>. The badge above keeps the
+              channel's value.
+            </div>
+          ) : (
+            <div style={{ fontSize: 12, color: 'var(--ink-600)' }}>
+              Transcript reading agrees: <b style={{ fontWeight: 600 }}>{label(read)}</b>
+              {!channel && ' — no channel signal for this call, so this fills the gap.'}
+            </div>
+          )}
+          {analysis.sentimentReason && (
+            <div style={{ fontSize: 13, color: 'var(--ink-900)', lineHeight: '19px', textWrap: 'pretty' }}>
+              {analysis.sentimentReason}
+            </div>
+          )}
+        </div>
+      )}
       <p style={{ margin: '10px 0 0', fontSize: 11, color: 'var(--ink-500)', lineHeight: '16px' }}>
         One reading for the whole call — the channel reports satisfaction at the end, not over
         time, so this is shown as a single band rather than a trend.
+        {!analysis && ' Run evals to read the caller\'s emotion from the transcript.'}
       </p>
     </div>
   );

@@ -1,0 +1,15 @@
+{
+  "title": "HueCallAnalysis",
+  "type": "object",
+  "required": ["applicable", "responseQualityJustification", "sentiment", "sentimentReason", "overallAssessment"],
+  "properties": {
+    "applicable": { "type": "boolean", "description": "False when the call is too thin to judge (no caller turns, or an immediate drop)." },
+    "responseQuality": { "type": "integer", "description": "0-100. Omit entirely when applicable is false — never send 0 as a placeholder." },
+    "responseQualityJustification": { "type": "string", "description": "One line, specific to this call, naming the behaviour or criterion the score rests on." },
+    "sentiment": { "type": "string", "enum": ["happy", "neutral", "frustrated", "distressed", "unknown"], "description": "Dominant caller emotion across the call." },
+    "sentimentReason": { "type": "string", "description": "Short reason, quoting or paraphrasing the caller." },
+    "overallAssessment": { "type": "string", "description": "2-3 sentences on whether the call met the SOW's intent." },
+    "criteriaSatisfied": { "type": "array", "items": { "type": "string" }, "description": "Criterion ids the call satisfied." },
+    "criteriaBreached": { "type": "array", "items": { "type": "string" }, "description": "Criterion ids the call breached." }
+  }
+}

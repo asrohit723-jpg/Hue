@@ -400,6 +400,30 @@ export const api = {
   patternContext: (criterionId: string) =>
     call<import('./judges').PatternContext>('governance', 'patternContext', { criterionId }),
 
+  /** Transcript + CMMS record + active criteria, for the call analyst. */
+  callAnalysisContext: (conversationId: string) =>
+    call<{
+      transcript: Array<{ performer: string; at: string | null; message: string }>;
+      cmmsRecord: Record<string, unknown> | null;
+      criteria: Array<{ id: string; clauseRef: string; requires: string }>;
+      channelSentiment: string | null;
+      srClaimed: boolean;
+      durationSec: number | null;
+    }>('governance', 'callAnalysisContext', { conversationId }),
+
+  /** Persist the one analysed field that has a column. */
+  saveCallAnalysis: (a: {
+    conversationId: string;
+    applicable: number;
+    responseQuality: number;
+    sentiment: string;
+  }) =>
+    call<{ scoreWritten: number | null; sentimentWritten: string | null; channelSentiment: string | null }>(
+      'governance',
+      'saveCallAnalysis',
+      a,
+    ),
+
   /** Persist a proposal the browser-side judges produced. */
   saveCorrection: (deviationId: string, rootCause: string, proposalJson: string) =>
     call<{ correctionId: string; deviationId: string; target: string; title: string }>(

@@ -26,6 +26,7 @@ const AGENTS = {
   conformance: 'sow-conformance-judge',
   rootCause: 'root-cause-classifier',
   proposer: 'correction-proposer',
+  callAnalysis: 'call-analysis',
 } as const;
 
 export class JudgeTimeout extends Error {}
@@ -79,6 +80,7 @@ const AGENTS_LABEL: Record<string, string> = {
   [AGENTS.conformance]: 'The conformance judge',
   [AGENTS.rootCause]: 'The root-cause classifier',
   [AGENTS.proposer]: 'The correction proposer',
+  [AGENTS.callAnalysis]: 'The call analyst',
 };
 
 // ---------------------------------------------------------------------------
@@ -292,4 +294,75 @@ export async function proposeCorrection(ctx: JudgeContext): Promise<CorrectionPr
     throw new JudgeInvalid(`Proposer returned an unusable cmmsAction.verb.`);
   }
   return v;
+}
+
+/** What the call analyst returns. Mirrors the agent's HueCallAnalysis schema. */
+export interface CallAnalysis {
+  applicable: boolean;
+  responseQuality?: number | null;
+  responseQualityJustification: string;
+  sentiment: 'happy' | 'neutral' | 'frustrated' | 'distressed' | 'unknown';
+  sentimentReason: string;
+  overallAssessment: string;
+  criteriaSatisfied?: string[];
+  criteriaBreached?: string[];
+}
+
+export interface CallAnalysisRun {
+  ok: boolean;
+  analysis?: CallAnalysis;
+  /** What the channel's own model said, for the reconciliation line. */
+  channelSentiment?: string | null;
+  scoreWritten?: number | null;
+  error?: string;
+  unavailable?: boolean;
+}
+
+/**
+ * Read one call end to end and fill what the transcript actually supports.
+ *
+ * Deliberately NOT a scorer of the audio pipeline: latency, speech-to-text and
+ * text-to-speech are properties of sound this has never heard, and the agent is
+ * instructed to refuse them. They stay "not measured" on the scorecard.
+ *
+ * Runs in the browser like every other judge — the prompt carries a whole
+ * transcript plus the criteria, so it is nowhere near the ~10s function ceiling.
+ * A call too thin to judge comes back applicable=false and writes no score; a
+ * judge that never answers comes back unavailable and writes nothing at all.
+ */
+export async function runCallAnalysis(conversationId: string): Promise<CallAnalysisRun> {
+  try {
+    const ctx = await api.callAnalysisContext(conversationId);
+    const v = await runAgent<CallAnalysis>(AGENTS.callAnalysis, {
+      transcript: ctx.transcript,
+      cmmsRecord: ctx.cmmsRecord,
+      criteria: ctx.criteria,
+      agentClaimedARequest: ctx.srClaimed,
+      channelSatisfactionSignal: ctx.channelSentiment,
+      durationSec: ctx.durationSec,
+    });
+
+    if (typeof v?.applicable !== 'boolean') {
+      throw new JudgeInvalid('Call analyst returned no applicable flag.');
+    }
+
+    const saved = await api.saveCallAnalysis({
+      conversationId,
+      applicable: v.applicable ? 1 : 0,
+      responseQuality: typeof v.responseQuality === 'number' ? v.responseQuality : -1,
+      sentiment: v.sentiment ?? '',
+    });
+
+    return {
+      ok: true,
+      analysis: v,
+      channelSentiment: saved.channelSentiment,
+      scoreWritten: saved.scoreWritten,
+    };
+  } catch (err) {
+    if (err instanceof JudgeTimeout) {
+      return { ok: false, unavailable: true, error: err.message };
+    }
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 }
