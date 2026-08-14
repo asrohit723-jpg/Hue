@@ -1286,6 +1286,7 @@ server.addHandler({
       // Only fields the proposer actually named, mapped to writeable ones.
       const fields: any[] = Array.isArray(action.fields) ? action.fields : [];
       const patch: Record<string, unknown> = {};
+      const notes: string[] = [];
       for (const f of fields) {
         const label = String(f.label ?? '').toLowerCase();
         const value = String(f.value ?? '');
@@ -1298,11 +1299,39 @@ server.addHandler({
           if (m.length) patch.urgency = m[m.length - 1];
         } else if (label.indexOf('subject') >= 0) {
           patch.subject = value.slice(0, 255);
-        } else if (label.indexOf('description') >= 0 || label.indexOf('window') >= 0) {
-          patch.description = value.slice(0, 2000);
+        } else {
+          // Everything else the proposer named goes onto the description,
+          // labelled. Matching a fixed vocabulary ("window", "description")
+          // meant a proposal that said "Preferred Visit Date" or "Notes" wrote
+          // nothing at all — the fix silently did less than it claimed. The CMMS
+          // has no field for most of what a correction records, so the
+          // description is where it goes, with its label kept so the reader
+          // knows what it is.
+          notes.push(`${String(f.label ?? '').trim()}: ${value}`);
         }
       }
+      if (notes.length) patch.description = notes.join('\n');
+
       if (Object.keys(patch).length) {
+        // A correction ADDS what the agent failed to record. It must never
+        // replace what is already on the record: the fault description is the
+        // caller's own account of the problem, and overwriting it to add a visit
+        // window destroys the very thing the request exists to describe.
+        if (typeof patch.description === 'string') {
+          const current = await cmms('list-service-requests', {
+            page_size: 1,
+            page: 1,
+            filters: `id(equals)=${convo.cmms_sr_id}`,
+          });
+          const existing = String(rowsOf(current)[0]?.description ?? '').trim();
+          const addition = String(patch.description).trim();
+          // Idempotent: approving twice must not append the same line twice.
+          patch.description = !existing
+            ? addition
+            : existing.includes(addition)
+              ? existing
+              : `${existing}\n\n[Hue] ${addition}`.slice(0, 2000);
+        }
         await cmms('update-service-request', {
           id: Number(convo.cmms_sr_id),
           servicerequest: patch,
