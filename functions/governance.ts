@@ -492,13 +492,17 @@ function currentSowRow(db: any) {
  * new conversation.
  */
 function activeGeneratedEvals(db: any, fingerprint: string): any[] {
-  if (!fingerprint) return [];
+  // A CUSTOM eval is not derived from the scope of work, so it is not bound to
+  // a version of it. Binding one would mean a person's own criterion silently
+  // stopped grading the moment somebody edited the SOW — losing their work
+  // without saying so.
   return db.query(
     `select * from generated_evals
-      where id <> '__seed__' and sow_fingerprint = $1
+      where id <> '__seed__'
+        and (sow_fingerprint = $1 or generated_by = 'manual')
         and active = 'true' and approved = 'true'
       order by clause_ref, criterion_id`,
-    [fingerprint],
+    [fingerprint || ''],
   ).rows;
 }
 
@@ -525,7 +529,8 @@ function generatedCriterion(db: any, criterionId: string) {
 
   const row = db.query(
     `select * from generated_evals
-      where id <> '__seed__' and criterion_id = $1 and sow_fingerprint = $2
+      where id <> '__seed__' and criterion_id = $1
+        and (sow_fingerprint = $2 or generated_by = 'manual')
         and active = 'true' and approved = 'true' and layer = 'semantic'
       limit 1`,
     [criterionId, String(sow.fingerprint ?? '')],
@@ -2011,14 +2016,14 @@ server.addHandler({
     const upstreamFingerprint = upstream ? fingerprintOf(upstream.body) : '';
 
     const fingerprint = row ? String(row.fingerprint ?? '') : '';
-    const evals = fingerprint
-      ? db.query(
-          `select * from generated_evals
-            where id <> '__seed__' and sow_fingerprint = $1
-            order by clause_ref, criterion_id`,
-          [fingerprint],
-        ).rows
-      : [];
+    // Custom evals appear whatever the SOW says, because they do not come from
+    // it — see activeGeneratedEvals.
+    const evals = db.query(
+      `select * from generated_evals
+        where id <> '__seed__' and (sow_fingerprint = $1 or generated_by = 'manual')
+        order by clause_ref, criterion_id`,
+      [fingerprint || ''],
+    ).rows;
 
     return {
       sow: row
@@ -2186,9 +2191,13 @@ server.addHandler({
     // than deleted: a regeneration that drops a criterion should stop it
     // grading, not erase that it once existed.
     let retired = 0;
+    // Only what the WRITER produced is swept. A hand-written eval was never in
+    // the model's output and must not be retired for being absent from it —
+    // that would delete somebody's own criterion on the next regeneration.
     const prior = db.query(
       `select id, criterion_id from generated_evals
-        where id <> '__seed__' and sow_fingerprint = $1 and active = 'true'`,
+        where id <> '__seed__' and sow_fingerprint = $1 and active = 'true'
+          and generated_by <> 'manual'`,
       [fingerprint],
     ).rows;
     for (const p of prior) {
@@ -2198,6 +2207,117 @@ server.addHandler({
     }
 
     return { saved: written.length, criteria: written, rejected, retired, sowFingerprint: fingerprint };
+  },
+});
+
+server.addHandler({
+  name: 'saveCustomEval',
+  description:
+    "Add a criterion written by hand. Stored beside the generated ones and graded like them, but marked manual so a regeneration never sweeps it away and a change to the scope of work never unbinds it.",
+  parameters: {
+    title: { description: 'Short name for the check', type: 'string' },
+    clauseRef: { description: 'Clause this comes from, or blank', type: 'string' },
+    description: { description: 'What it requires', type: 'string' },
+    passDefinition: { description: 'Exactly what must be observable to PASS', type: 'string' },
+    failDefinition: { description: 'Exactly what makes it FAIL', type: 'string' },
+    severity: { description: 'critical | high | medium | low', type: 'string' },
+    layer: { description: 'semantic | deterministic', type: 'string' },
+    modality: { description: 'voice | text | any', type: 'string' },
+    savedBy: { description: 'Who wrote it', type: 'string' },
+  },
+  execute: async (args) => {
+    const db = connect();
+    const title = String(args.title ?? '').trim();
+    const pass = String(args.passDefinition ?? '').trim();
+    const fail = String(args.failDefinition ?? '').trim();
+
+    if (!title) throw new Error('Rejected: an eval needs a title.');
+    // The same bar the generated ones are held to. A criterion with only one
+    // side stated cannot be judged consistently — whoever grades it invents the
+    // other half, and two runs disagree.
+    if (!pass || !fail) {
+      throw new Error('Rejected: state both what passes and what fails — a criterion with one side is not testable.');
+    }
+
+    // Derived from the title so re-adding the same criterion UPDATES rather
+    // than quietly creating a second one that grades the same thing twice.
+    const slug = title
+      .toUpperCase()
+      .replace(/[^A-Z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 24) || 'EVAL';
+    // One namespace with the generated evals, because generatedCriterion gates
+    // on this prefix and a second prefix is a second thing to keep in step.
+    const criterionId = `GEN-CUS-${slug}`.slice(0, 40).replace(/-+$/, '');
+
+    const LAYERS = ['deterministic', 'semantic'];
+    const SEVERITIES = ['critical', 'high', 'medium', 'low'];
+    const MODALITIES = ['voice', 'text', 'any'];
+    const layer = LAYERS.indexOf(String(args.layer ?? '')) >= 0 ? String(args.layer) : 'semantic';
+    const severity =
+      SEVERITIES.indexOf(String(args.severity ?? '')) >= 0 ? String(args.severity) : 'medium';
+    const modality =
+      MODALITIES.indexOf(String(args.modality ?? '')) >= 0 ? String(args.modality) : 'any';
+
+    const sow = currentSowRow(db);
+    const now = nowIso();
+    const savedBy = String(args.savedBy ?? '').trim() || 'hand-written';
+    const id = `GE-manual-${criterionId}`;
+
+    const values = [
+      sow ? String(sow.id) : '',
+      // Stamped with the CURRENT scope of work for provenance only. Grading
+      // ignores it for manual evals, which are not derived from that text.
+      sow ? String(sow.fingerprint ?? '') : '',
+      criterionId,
+      String(args.clauseRef ?? '').trim() || '—',
+      title,
+      String(args.description ?? '').trim(),
+      pass,
+      fail,
+      layer,
+      'custom',
+      severity,
+      modality,
+      'true',
+      'true',
+      savedBy,
+      now,
+      'manual',
+      '',
+    ];
+
+    const existing = db.query('select id from generated_evals where id = $1 limit 1', [id]).rows[0];
+    if (existing) {
+      db.query(
+        `update generated_evals set
+           sow_id=$2, sow_fingerprint=$3, criterion_id=$4, clause_ref=$5, title=$6,
+           description=$7, pass_definition=$8, fail_definition=$9, layer=$10,
+           check_type=$11, severity=$12, modality=$13, active=$14, approved=$15,
+           approved_by=$16, generated_at=$17, generated_by=$18, source_excerpt=$19,
+           schema_version=1
+         where id=$1`,
+        [id, ...values],
+      );
+    } else {
+      db.query(
+        `insert into generated_evals
+           (id, sow_id, sow_fingerprint, criterion_id, clause_ref, title, description,
+            pass_definition, fail_definition, layer, check_type, severity, modality,
+            active, approved, approved_by, generated_at, generated_by, source_excerpt,
+            schema_version)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,1)`,
+        [id, ...values],
+      );
+    }
+
+    return {
+      criterionId,
+      id,
+      updated: Boolean(existing),
+      // Only a semantic eval reaches a judge; a deterministic one has no code.
+      runnable: layer === 'semantic',
+    };
   },
 });
 

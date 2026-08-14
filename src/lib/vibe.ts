@@ -589,6 +589,22 @@ export const api = {
       evalCount: number; needsGeneration: boolean;
     }>('governance', 'saveSow', a),
 
+  /**
+   * Add a criterion by hand. Stored beside the generated ones and graded like
+   * them, but marked manual so a regeneration never sweeps it away and an edit
+   * to the scope of work never unbinds it.
+   */
+  saveCustomEval: (a: {
+    title: string; clauseRef: string; description: string;
+    passDefinition: string; failDefinition: string;
+    severity: string; layer: string; modality: string; savedBy: string;
+  }) =>
+    call<{ criterionId: string; id: string; updated: boolean; runnable: boolean }>(
+      'governance',
+      'saveCustomEval',
+      a,
+    ),
+
   /** Persist the criteria the eval writer produced. Server re-validates each. */
   saveGeneratedEvals: (a: { sowFingerprint: string; evalsJson: string; generatedBy: string }) =>
     call<{

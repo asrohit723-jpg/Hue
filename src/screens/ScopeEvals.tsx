@@ -43,16 +43,7 @@ interface SeedCriterion {
 
 
 /** Criterion family -> the design's category vocabulary. */
-const CATEGORY: Record<string, string> = {
-  LOG: 'Logging & records',
-  SCOPE: 'Scope handling',
-  ESC: 'Escalation & safety',
-  CALL: 'Caller handling',
-  SCHED: 'Scheduling',
-  CAT: 'Logging & records',
-};
 
-const COLS = 'minmax(0,1fr) 150px 130px 96px 110px';
 
 const microLabel: React.CSSProperties = {
   fontSize: 11,
@@ -81,15 +72,28 @@ const selectStyle: React.CSSProperties = {
   outline: 'none',
 };
 
-const FILTERS = ['All evals', 'From scope of work', 'Added / imported', 'Paused'];
-
-function familyOf(id: string): string {
-  return CATEGORY[id.split('-')[1] ?? ''] ?? 'Added by your team';
+/** One eval in the single list, whatever produced it. */
+interface UnifiedEval {
+  id: string;
+  origin: 'seeded' | 'sow' | 'custom';
+  title: string;
+  clauseRef: string;
+  description: string;
+  passDefinition: string;
+  failDefinition: string;
+  sourceExcerpt: string;
+  layer: string;
+  severity: string;
+  modality: string;
+  /** Something actually checks it. A card that is not wired never shows a rate. */
+  wired: boolean;
+  fails: number;
+  rate: number | null;
 }
 
-function sourceOf(c: SeedCriterion): string {
-  return c.source === 'ai_drafted' ? 'Scope of work' : 'Added manually';
-}
+const FILTERS = ['All evals', 'From scope of work', 'Added / imported', 'Seeded', 'Not wired'];
+
+
 
 export function ScopeEvals() {
   const criteria = (seed as { criteria: SeedCriterion[] }).criteria;
@@ -98,8 +102,36 @@ export function ScopeEvals() {
   const [filter, setFilter] = useState(FILTERS[0]);
   const [editingDoc, setEditingDoc] = useState(false);
   const [draft, setDraft] = useState('');
-  const [openEval, setOpenEval] = useState<SeedCriterion | null>(null);
   const [creating, setCreating] = useState(false);
+  const [savingEval, setSavingEval] = useState(false);
+  const [evalError, setEvalError] = useState<string | null>(null);
+
+  /**
+   * Save a hand-written eval.
+   *
+   * It lands beside the generated ones and grades like them. The server marks
+   * it manual, which is what keeps a regeneration from sweeping it away and an
+   * edit to the scope of work from unbinding it — a criterion somebody wrote
+   * themselves should not disappear because the contract was reworded.
+   */
+  async function saveEval(form: {
+    title: string; clauseRef: string; description: string;
+    passDefinition: string; failDefinition: string;
+    severity: string; layer: string; modality: string;
+  }) {
+    setEvalError(null);
+    setSavingEval(true);
+    try {
+      await api.saveCustomEval({ ...form, savedBy: 'this session' });
+      setCreating(false);
+      const current = await api.currentSow();
+      setSow(current);
+    } catch (err) {
+      setEvalError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSavingEval(false);
+    }
+  }
 
   // The real scope of work, and the evals written from it. Pasted for now; the
   // fetch from agent 6208 is one function away — see fetchSowFromAgent.
@@ -211,31 +243,82 @@ export function ScopeEvals() {
     return m;
   }, [deviations]);
 
-  const rows = useMemo(() => {
+
+  /**
+   * Every eval, from every source, in one shape.
+   *
+   * The two lists this screen used to stack answered the same question in two
+   * formats. Merging them means picking a shape that fits all three sources and
+   * letting each fill only what it really has — a seeded criterion has a
+   * description rather than a pass/fail split, and saying so beats printing an
+   * empty "Passes" row as though the definition were missing.
+   */
+  const allEvals = useMemo(() => {
+    const rate = (id: string, wired: boolean) => {
+      const fails = failures.get(id) ?? 0;
+      return {
+        fails,
+        rate: wired && evaluatedCalls ? Math.round(((evaluatedCalls - fails) / evaluatedCalls) * 100) : null,
+      };
+    };
+
+    const seeded = criteria.map((c) => {
+      const wired = WIRED_CRITERIA.has(c.id);
+      return {
+        id: c.id,
+        origin: 'seeded' as const,
+        title: c.title,
+        clauseRef: c.clauseRef,
+        description: c.description,
+        passDefinition: '',
+        failDefinition: '',
+        sourceExcerpt: '',
+        layer: c.layer,
+        severity: '',
+        modality: 'any',
+        wired,
+        ...rate(c.id, wired),
+      };
+    });
+
+    const written = (sow?.evals ?? [])
+      .filter((e) => e.active)
+      .map((e) => ({
+        id: e.criterionId,
+        origin: (e.generatedBy === 'manual' ? 'custom' : 'sow') as 'custom' | 'sow',
+        title: e.title,
+        clauseRef: e.clauseRef,
+        description: e.description,
+        passDefinition: e.passDefinition,
+        failDefinition: e.failDefinition,
+        sourceExcerpt: e.sourceExcerpt,
+        layer: e.layer,
+        severity: e.severity,
+        modality: e.modality,
+        // Only a semantic eval reaches a judge; a deterministic one has no code
+        // behind it and is never reported as a criterion a call passed.
+        wired: e.runnable,
+        ...rate(e.criterionId, e.runnable),
+      }));
+
+    return [...written, ...seeded];
+  }, [criteria, sow, failures, evaluatedCalls]);
+
+  const evalRows = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    return criteria
-      .map((c) => {
-        const implemented = WIRED_CRITERIA.has(c.id);
-        const fails = failures.get(c.id) ?? 0;
-        const rate =
-          implemented && evaluatedCalls
-            ? Math.round(((evaluatedCalls - fails) / evaluatedCalls) * 100)
-            : null;
-        return { c, implemented, fails, rate };
-      })
-      .filter(({ c, implemented }) => {
-        if (filter === 'From scope of work' && c.source !== 'ai_drafted') return false;
-        if (filter === 'Added / imported' && c.source === 'ai_drafted') return false;
-        // "Paused" in this data means a criterion no check runs against — it is
-        // configured but inert, which is the same thing from the user's side.
-        if (filter === 'Paused' && (c.active && implemented)) return false;
-        if (!needle) return true;
-        return [c.id, c.title, c.description, c.clauseRef, familyOf(c.id)]
-          .join(' ')
-          .toLowerCase()
-          .includes(needle);
-      });
-  }, [criteria, q, filter, failures, evaluatedCalls]);
+    return allEvals.filter((e) => {
+      if (filter === 'From scope of work' && e.origin !== 'sow') return false;
+      if (filter === 'Added / imported' && e.origin !== 'custom') return false;
+      if (filter === 'Seeded' && e.origin !== 'seeded') return false;
+      if (filter === 'Not wired' && e.wired) return false;
+      if (!needle) return true;
+      return [e.id, e.title, e.description, e.clauseRef, e.passDefinition, e.failDefinition]
+        .join(' ')
+        .toLowerCase()
+        .includes(needle);
+    });
+  }, [allEvals, q, filter]);
+
 
   const wired = criteria.filter((c) => WIRED_CRITERIA.has(c.id)).length;
   const coverage = criteria.length ? Math.round((wired / criteria.length) * 100) : 0;
@@ -642,115 +725,12 @@ export function ScopeEvals() {
       </div>
 
 
-      {/* ---- evals written from the scope of work ---- */}
-      {generated.filter((e) => e.active).length ? (
-        <div
-          style={{
-            background: '#fff',
-            border: '1px solid var(--border-default)',
-            borderRadius: 8,
-            marginTop: 16,
-            overflow: 'hidden',
-          }}
-        >
-          <div
-            style={{
-              padding: '14px 20px',
-              borderBottom: '1px solid var(--border-default)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 10,
-              flexWrap: 'wrap',
-            }}
-          >
-            <h3 style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>From your scope of work</h3>
-            <span style={{ fontSize: 12, color: 'var(--ink-500)' }}>
-              written by {generated[0]?.generatedBy || 'the eval writer'} · saved, and re-read on
-              every load
-            </span>
-          </div>
-
-          {generated
-            .filter((e) => e.active)
-            .map((e) => (
-              <div
-                key={e.id}
-                style={{
-                  padding: '12px 20px',
-                  borderBottom: '1px solid var(--ink-100)',
-                  display: 'flex',
-                  gap: 12,
-                  alignItems: 'flex-start',
-                }}
-              >
-                <span
-                  style={{
-                    fontFamily: 'var(--font-mono)',
-                    fontSize: 11,
-                    color: 'var(--ink-500)',
-                    flex: '0 0 118px',
-                    paddingTop: 2,
-                  }}
-                >
-                  {e.criterionId}
-                </span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 500 }}>{e.title}</div>
-                  <div style={{ fontSize: 12, color: 'var(--ink-600)', marginTop: 3, lineHeight: '18px' }}>
-                    <b style={{ fontWeight: 600, color: 'var(--success-700)' }}>Passes</b>{' '}
-                    {e.passDefinition}
-                  </div>
-                  <div style={{ fontSize: 12, color: 'var(--ink-600)', marginTop: 2, lineHeight: '18px' }}>
-                    <b style={{ fontWeight: 600, color: 'var(--danger-700)' }}>Fails</b>{' '}
-                    {e.failDefinition}
-                  </div>
-                  {/* Quoted from the SOW, so every criterion can be traced back
-                      to the sentence that produced it. */}
-                  {e.sourceExcerpt ? (
-                    <div
-                      style={{
-                        fontSize: 11,
-                        color: 'var(--ink-500)',
-                        marginTop: 6,
-                        paddingLeft: 9,
-                        borderLeft: '2px solid var(--ink-100)',
-                        lineHeight: '17px',
-                      }}
-                    >
-                      {e.sourceExcerpt}
-                    </div>
-                  ) : null}
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
-                  <span style={{ fontSize: 11, color: 'var(--ink-500)' }}>
-                    {e.clauseRef} · {e.severity}
-                    {e.modality !== 'any' ? ` · ${e.modality} only` : ''}
-                  </span>
-                  {/* A criterion the writer called deterministic has no code
-                      behind it. Saying so is the whole point — it is not graded,
-                      and it must never read as one a call passed. */}
-                  <span
-                    style={{
-                      fontSize: 10,
-                      fontWeight: 600,
-                      letterSpacing: '.03em',
-                      textTransform: 'uppercase',
-                      padding: '1px 7px',
-                      borderRadius: 4,
-                      background: e.runnable ? 'var(--success-050)' : 'var(--ink-050)',
-                      color: e.runnable ? 'var(--success-700)' : 'var(--ink-600)',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {e.runnable ? 'Graded' : 'Needs code'}
-                  </span>
-                </div>
-              </div>
-            ))}
-        </div>
-      ) : null}
-
-      {/* ---- eval set ---- */}
+      {/* ---- evals: ONE list, every source ----
+           Seeded criteria and evals written from the scope of work used to sit
+           in two stacked sections with different shapes, which made the same
+           question ("what is this call graded against?") have two answers. One
+           card, and each source shows what it actually has rather than an
+           invented field. */}
       <div
         style={{
           background: '#fff',
@@ -760,143 +740,76 @@ export function ScopeEvals() {
           overflow: 'hidden',
         }}
       >
-        <div style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <div style={{ flex: 1, minWidth: 200, display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span
-              style={{
-                width: 34,
-                height: 34,
-                flex: '0 0 34px',
-                borderRadius: 8,
-                background: 'var(--brand-indigo-050)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--brand-indigo)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M9 11l3 3L22 4" />
-                <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
-              </svg>
-            </span>
-            <div>
-              <h3 style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>Evals</h3>
-              <div style={{ fontSize: 12, color: 'var(--ink-500)', marginTop: 2 }}>
-                {generated.filter((e) => e.active).length
-                  ? `${runnableCount} written from your scope of work · ${wired} seeded and wired`
-                  : `Seeded · ${wired} wired to a check, ${criteria.length - wired} not yet`}
-              </div>
+        <div
+          style={{
+            padding: '14px 20px',
+            borderBottom: '1px solid var(--border-default)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            flexWrap: 'wrap',
+          }}
+        >
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <h3 style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>Evals</h3>
+            <div style={{ fontSize: 12, color: 'var(--ink-500)', marginTop: 2 }}>
+              {allEvals.length} in force · {allEvals.filter((e) => e.wired).length} with a check
+              behind them · every call is graded against these
             </div>
           </div>
+
           <div style={{ position: 'relative' }}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--ink-500)" strokeWidth="2" strokeLinecap="round" style={{ position: 'absolute', left: 10, top: 9 }}>
               <circle cx="11" cy="11" r="8" />
               <line x1="21" y1="21" x2="16.65" y2="16.65" />
             </svg>
-            <input className="hue-field"
+            <input
+              className="hue-field"
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Search"
               style={{
-                width: 180,
-                height: 32,
-                border: '1px solid var(--border-default)',
-                borderRadius: 6,
-                padding: '0 10px 0 30px',
-                fontSize: 13,
-                outline: 'none',
+                width: 180, height: 32, border: '1px solid var(--border-default)',
+                borderRadius: 6, padding: '0 10px 0 30px', fontSize: 13, outline: 'none',
                 boxSizing: 'border-box',
               }}
             />
           </div>
-          <select className="hue-field" value={filter} onChange={(e) => setFilter(e.target.value)} style={{ ...selectStyle, width: 150 }}>
+
+          <select
+            className="hue-field"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            style={{ ...selectStyle, height: 32, width: 168 }}
+          >
             {FILTERS.map((f) => (
-              <option key={f} value={f}>
-                {f}
-              </option>
+              <option key={f} value={f}>{f}</option>
             ))}
           </select>
-          <button className="hue-btn"
-            disabled
-            title="Importing needs somewhere to store criteria"
+
+          <button
+            className="hue-btn"
+            onClick={() => setCreating(true)}
             style={{
-              height: 32,
-              padding: '0 12px',
-              borderRadius: 6,
-              border: '1px solid var(--border-default)',
-              background: '#fff',
-              color: 'var(--ink-400)',
-              fontWeight: 500,
-              fontSize: 13,
-              cursor: 'not-allowed',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            Import
-          </button>
-          <button className="hue-btn"
-            onClick={() => {
-              setCreating(true);
-              setOpenEval(null);
-            }}
-            style={{
-              height: 32,
-              padding: '0 12px',
-              borderRadius: 6,
-              border: '1px solid var(--blue-500)',
-              background: 'var(--blue-500)',
-              color: '#fff',
-              fontWeight: 500,
-              fontSize: 13,
-              cursor: 'pointer',
-              whiteSpace: 'nowrap',
+              height: 32, padding: '0 14px', borderRadius: 6,
+              border: '1px solid var(--blue-500)', background: 'var(--blue-500)',
+              color: '#fff', fontWeight: 500, fontSize: 13, cursor: 'pointer',
             }}
           >
             + New eval
           </button>
         </div>
 
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: COLS,
-            padding: '8px 20px',
-            borderTop: '1px solid var(--border-default)',
-            borderBottom: '1px solid var(--border-default)',
-            background: '#FAFBFD',
-            fontSize: 11,
-            letterSpacing: '.05em',
-            textTransform: 'uppercase',
-            color: 'var(--ink-500)',
-            fontWeight: 500,
-          }}
-        >
-          <span>Eval</span>
-          <span>Category</span>
-          <span>Source</span>
-          <span>Status</span>
-          <span style={{ textAlign: 'right' }}>Pass rate · 30d</span>
-        </div>
+        {evalRows.map((e) => (
+          <EvalCard key={e.id} e={e} />
+        ))}
 
-        <div style={{ maxHeight: '56vh', overflow: 'auto' }}>
-          {rows.map(({ c, implemented, rate }) => (
-            <EvalRow
-              key={c.id}
-              c={c}
-              implemented={implemented}
-              rate={rate}
-              onOpen={() => {
-                setOpenEval(c);
-                setCreating(false);
-              }}
-            />
-          ))}
-          {rows.length === 0 && (
-            <div style={{ padding: '28px 20px', textAlign: 'center', fontSize: 13, color: 'var(--ink-500)' }}>
-              No evals match.
-            </div>
-          )}
-        </div>
+        {evalRows.length === 0 && (
+          <div style={{ padding: '28px 20px', textAlign: 'center', fontSize: 13, color: 'var(--ink-500)' }}>
+            No evals match.
+          </div>
+        )}
+
         <div
           style={{
             padding: '9px 20px',
@@ -905,375 +818,276 @@ export function ScopeEvals() {
             borderTop: '1px solid var(--border-default)',
           }}
         >
-          Showing {rows.length} of {criteria.length} evals
+          Showing {evalRows.length} of {allEvals.length} evals
         </div>
       </div>
 
-      {(openEval || creating) && (
-        <EvalDrawer
-          c={openEval}
-          creating={creating}
-          fails={openEval ? (failures.get(openEval.id) ?? 0) : 0}
-          evaluatedCalls={evaluatedCalls ?? 0}
-          implemented={openEval ? WIRED_CRITERIA.has(openEval.id) : false}
-          onClose={() => {
-            setOpenEval(null);
+
+      {creating && (
+        <NewEval
+          busy={savingEval}
+          error={evalError}
+          onCancel={() => {
             setCreating(false);
+            setEvalError(null);
           }}
+          onSave={saveEval}
         />
       )}
     </div>
   );
 }
 
-function EvalRow({
-  c,
-  implemented,
-  rate,
-  onOpen,
-}: {
-  c: SeedCriterion;
-  implemented: boolean;
-  rate: number | null;
-  onOpen: () => void;
-}) {
-  // "Active" in the seed means configured; a criterion nothing checks is inert
-  // whatever the flag says, and the table shows that rather than the flag.
-  const status = !c.active
-    ? { text: 'Paused', fg: 'var(--ink-500)', dot: 'var(--ink-400)' }
-    : implemented
-      ? { text: 'Active', fg: 'var(--success-700)', dot: 'var(--success-500)' }
-      : { text: 'Not wired', fg: 'var(--warning-700)', dot: 'var(--warning-500)' };
+/**
+ * One eval, whatever produced it.
+ *
+ * Each source fills only what it has: an eval written from the scope of work
+ * carries a pass/fail bar and the sentence it came from, a hand-written one
+ * carries the bar, and a seeded one carries its description. Printing an empty
+ * "Passes" row on a seeded criterion would read as a missing definition rather
+ * than a different kind of criterion.
+ */
+function EvalCard({ e }: { e: UnifiedEval }) {
+  const originTone =
+    e.origin === 'sow'
+      ? { bg: 'var(--brand-indigo-050)', fg: 'var(--brand-indigo)', label: 'Scope of work' }
+      : e.origin === 'custom'
+        ? { bg: 'var(--blue-025)', fg: 'var(--blue-600)', label: 'Custom' }
+        : { bg: 'var(--ink-050)', fg: 'var(--ink-600)', label: 'Seeded' };
 
   return (
     <div
-      onClick={onOpen}
-      className="hue-row"
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') onOpen();
-      }}
       style={{
-        display: 'grid',
-        gridTemplateColumns: COLS,
-        alignItems: 'center',
-        padding: '0 20px',
-        height: 46,
+        padding: '13px 20px',
         borderBottom: '1px solid var(--ink-100)',
-        cursor: 'pointer',
-        background: '#fff',
+        display: 'flex',
+        gap: 12,
+        alignItems: 'flex-start',
       }}
     >
       <span
-        title={c.title}
         style={{
-          fontSize: 13,
-          fontWeight: 500,
-          color: 'var(--ink-900)',
-          whiteSpace: 'nowrap',
+          fontFamily: 'var(--font-mono)',
+          fontSize: 11,
+          color: 'var(--ink-500)',
+          flex: '0 0 132px',
+          paddingTop: 2,
           overflow: 'hidden',
           textOverflow: 'ellipsis',
-          paddingRight: 16,
         }}
+        title={e.id}
       >
-        {c.title}
+        {e.id}
       </span>
-      <span style={{ fontSize: 12, color: 'var(--ink-600)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        {familyOf(c.id)}
-      </span>
-      <span style={{ fontSize: 12, color: 'var(--ink-600)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        {sourceOf(c)}
-      </span>
-      <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 500, color: status.fg }}>
-        <span style={{ width: 6, height: 6, borderRadius: 999, background: status.dot }} />
-        {status.text}
-      </span>
-      <span
-        style={{
-          fontSize: 13,
-          fontWeight: 600,
-          fontVariantNumeric: 'tabular-nums',
-          color:
-            rate === null
-              ? 'var(--ink-400)'
-              : rate >= 90
-                ? 'var(--success-700)'
-                : rate >= 70
-                  ? 'var(--warning-700)'
-                  : 'var(--danger-500)',
-          textAlign: 'right',
-        }}
-      >
-        {rate === null ? '—' : `${rate}%`}
-      </span>
+
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 13, fontWeight: 500 }}>{e.title}</span>
+          <span
+            style={{
+              fontSize: 10, fontWeight: 600, letterSpacing: '.03em', textTransform: 'uppercase',
+              padding: '1px 7px', borderRadius: 4, background: originTone.bg, color: originTone.fg,
+            }}
+          >
+            {originTone.label}
+          </span>
+        </div>
+
+        {e.passDefinition ? (
+          <>
+            <div style={{ fontSize: 12, color: 'var(--ink-600)', marginTop: 4, lineHeight: '18px' }}>
+              <b style={{ fontWeight: 600, color: 'var(--success-700)' }}>Passes</b> {e.passDefinition}
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--ink-600)', marginTop: 2, lineHeight: '18px' }}>
+              <b style={{ fontWeight: 600, color: 'var(--danger-700)' }}>Fails</b> {e.failDefinition}
+            </div>
+          </>
+        ) : e.description ? (
+          <div style={{ fontSize: 12, color: 'var(--ink-600)', marginTop: 4, lineHeight: '18px' }}>
+            {e.description}
+          </div>
+        ) : null}
+
+        {e.sourceExcerpt ? (
+          <div
+            style={{
+              fontSize: 11, color: 'var(--ink-500)', marginTop: 6, paddingLeft: 9,
+              borderLeft: '2px solid var(--ink-100)', lineHeight: '17px',
+            }}
+          >
+            {e.sourceExcerpt}
+          </div>
+        ) : null}
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flex: '0 0 auto' }}>
+        <span style={{ fontSize: 11, color: 'var(--ink-500)' }}>
+          {e.clauseRef}
+          {e.severity ? ` · ${e.severity}` : ''}
+          {e.modality && e.modality !== 'any' ? ` · ${e.modality} only` : ''}
+        </span>
+        <span
+          style={{
+            fontSize: 10, fontWeight: 600, letterSpacing: '.03em', textTransform: 'uppercase',
+            padding: '1px 7px', borderRadius: 4, whiteSpace: 'nowrap',
+            background: e.wired ? 'var(--success-050)' : 'var(--ink-050)',
+            color: e.wired ? 'var(--success-700)' : 'var(--ink-600)',
+          }}
+        >
+          {e.wired ? 'Active' : 'Not wired'}
+        </span>
+        {/* Carried from the table this replaced: a criterion nothing checks has
+            no pass rate, and "—" says that rather than implying 100%. */}
+        <span style={{ fontSize: 11, color: 'var(--ink-500)', fontVariantNumeric: 'tabular-nums' }}>
+          {e.rate === null ? '—' : `${e.rate}% pass`}
+          {e.fails ? ` · ${e.fails} failed` : ''}
+        </span>
+      </div>
     </div>
   );
 }
 
-/** The design's right-hand editing drawer. */
-function EvalDrawer({
-  c,
-  creating,
-  fails,
-  evaluatedCalls,
-  implemented,
-  onClose,
+/**
+ * Write an eval by hand.
+ *
+ * Both halves of the bar are required, exactly as they are for a generated
+ * one: a criterion that states only what passes leaves whoever grades it to
+ * invent the other half, and two runs then disagree about the same call.
+ */
+function NewEval({
+  busy,
+  error,
+  onCancel,
+  onSave,
 }: {
-  c: SeedCriterion | null;
-  creating: boolean;
-  fails: number;
-  evaluatedCalls: number;
-  implemented: boolean;
-  onClose: () => void;
+  busy: boolean;
+  error: string | null;
+  onCancel: () => void;
+  onSave: (f: {
+    title: string; clauseRef: string; description: string;
+    passDefinition: string; failDefinition: string;
+    severity: string; layer: string; modality: string;
+  }) => void;
 }) {
-  const [text, setText] = useState(c?.title ?? '');
-  const rate = implemented && evaluatedCalls ? Math.round(((evaluatedCalls - fails) / evaluatedCalls) * 100) : null;
-  const active = c?.active ?? true;
+  const [title, setTitle] = useState('');
+  const [clauseRef, setClauseRef] = useState('');
+  const [description, setDescription] = useState('');
+  const [passDefinition, setPass] = useState('');
+  const [failDefinition, setFail] = useState('');
+  const [severity, setSeverity] = useState('medium');
+  const [layer, setLayer] = useState('semantic');
+  const [modality, setModality] = useState('any');
+
+  const ready = Boolean(title.trim() && passDefinition.trim() && failDefinition.trim());
+  const field: React.CSSProperties = {
+    width: '100%', border: '1px solid var(--border-default)', borderRadius: 6,
+    padding: '8px 10px', fontSize: 13, fontFamily: 'var(--font-sans)', outline: 'none',
+    boxSizing: 'border-box', color: 'var(--ink-900)',
+  };
+  const lbl: React.CSSProperties = {
+    fontSize: 11, letterSpacing: '.04em', textTransform: 'uppercase',
+    color: 'var(--ink-500)', fontWeight: 500, display: 'block', marginBottom: 5,
+  };
 
   return (
-    <>
-      <div
-        onClick={onClose}
-        style={{ position: 'fixed', inset: 0, background: 'rgba(40,54,72,0.32)', zIndex: 55 }}
-      />
-      <div
-        style={{
-          position: 'fixed',
-          top: 0,
-          right: 0,
-          bottom: 0,
-          width: 440,
-          maxWidth: '92vw',
-          background: '#fff',
-          zIndex: 56,
-          boxShadow: '-16px 0 48px rgba(40,54,72,0.18)',
-          display: 'flex',
-          flexDirection: 'column',
-        }}
-      >
-        <div
-          style={{
-            padding: '18px 22px',
-            borderBottom: '1px solid var(--border-default)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-          }}
-        >
-          <span style={microLabel}>{creating ? 'New eval' : `Eval · ${c?.id}`}</span>
-          <span
-            onClick={onClose}
-            style={{
-              marginLeft: 'auto',
-              width: 28,
-              height: 28,
-              borderRadius: 6,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              color: 'var(--ink-600)',
-            }}
-          >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-              <line x1="18" y1="6" x2="6" y2="18" />
-              <line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-          </span>
-        </div>
-
-        <div style={{ flex: 1, overflow: 'auto', padding: '20px 22px' }}>
-          <div style={{ ...microLabel, marginBottom: 6 }}>Criterion</div>
-          <textarea className="hue-field"
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            placeholder="Describe the rule in plain English, e.g. “Always confirm the caller's mobile number”"
-            style={{
-              width: '100%',
-              minHeight: 88,
-              resize: 'vertical',
-              border: '1px solid var(--border-default)',
-              borderRadius: 6,
-              padding: '10px 12px',
-              fontFamily: 'var(--font-sans)',
-              fontSize: 13,
-              lineHeight: '20px',
-              color: 'var(--ink-900)',
-              outline: 'none',
-              boxSizing: 'border-box',
-            }}
-          />
-          {c && (
-            <p style={{ margin: '8px 0 0', fontSize: 12, color: 'var(--ink-600)', lineHeight: '18px' }}>
-              {c.description}
-            </p>
-          )}
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 18 }}>
-            <div>
-              <div style={{ ...microLabel, marginBottom: 6 }}>Category</div>
-              <select className="hue-field"
-                defaultValue={c ? familyOf(c.id) : 'Added by your team'}
-                style={{ ...selectStyle, width: '100%', height: 34 }}
-              >
-                {Array.from(new Set([...Object.values(CATEGORY), 'Added by your team'])).map((k) => (
-                  <option key={k} value={k}>
-                    {k}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <div style={{ ...microLabel, marginBottom: 6 }}>Status</div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, height: 34 }}>
-                <span
-                  style={{
-                    width: 34,
-                    height: 20,
-                    borderRadius: 999,
-                    background: active ? 'var(--success-500)' : 'var(--ink-200)',
-                    position: 'relative',
-                    display: 'inline-block',
-                  }}
-                >
-                  <span
-                    style={{
-                      position: 'absolute',
-                      top: 2,
-                      left: active ? 16 : 2,
-                      width: 16,
-                      height: 16,
-                      borderRadius: 999,
-                      background: '#fff',
-                    }}
-                  />
-                </span>
-                <span
-                  style={{
-                    fontSize: 13,
-                    fontWeight: 500,
-                    color: active ? 'var(--success-700)' : 'var(--ink-500)',
-                  }}
-                >
-                  {active ? 'Active' : 'Paused'}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div style={{ marginTop: 22, border: '1px solid var(--border-default)', borderRadius: 8, padding: '16px 18px' }}>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-              <span
-                style={{
-                  fontFamily: 'var(--font-display)',
-                  fontSize: 34,
-                  fontWeight: 700,
-                  lineHeight: 1,
-                  color:
-                    rate === null
-                      ? 'var(--ink-400)'
-                      : rate >= 90
-                        ? 'var(--success-700)'
-                        : rate >= 70
-                          ? 'var(--warning-700)'
-                          : 'var(--danger-500)',
-                }}
-              >
-                {rate === null ? '—' : `${rate}%`}
-              </span>
-              <span style={{ fontSize: 12, color: 'var(--ink-500)' }}>pass rate · all stored calls</span>
-            </div>
-            <div style={{ height: 6, borderRadius: 999, background: 'var(--ink-100)', marginTop: 12, overflow: 'hidden' }}>
-              <div
-                style={{
-                  height: '100%',
-                  width: `${rate ?? 0}%`,
-                  background: rate === null ? 'transparent' : 'var(--success-500)',
-                }}
-              />
-            </div>
-            <div style={{ fontSize: 12, color: 'var(--ink-600)', marginTop: 10 }}>
-              {rate === null
-                ? 'No check runs against this criterion yet, so it has no pass rate.'
-                : `Failed on ${fails} of ${evaluatedCalls} evaluated ${evaluatedCalls === 1 ? 'call' : 'calls'}.`}
-            </div>
-          </div>
-
-          <div style={{ marginTop: 18, fontSize: 12, color: 'var(--ink-500)', lineHeight: '19px' }}>
-            {c
-              ? `${c.id} · clause ${c.clauseRef} · ${c.layer} · ${c.checkType} · ${sourceOf(c)}`
-              : 'A new eval needs somewhere to be stored before it can grade anything.'}
-          </div>
-        </div>
-
-        <div
-          style={{
-            padding: '14px 22px',
-            borderTop: '1px solid var(--border-default)',
-            display: 'flex',
-            gap: 8,
-            alignItems: 'center',
-          }}
-        >
-          {creating ? (
-            <>
-              <button className="hue-btn"
-                disabled
-                title="Criteria ship in a bundled file — there is no table to add one to"
-                style={{
-                  height: 36,
-                  padding: '0 16px',
-                  borderRadius: 6,
-                  border: '1px solid var(--border-default)',
-                  background: 'var(--ink-100)',
-                  color: 'var(--ink-400)',
-                  fontWeight: 500,
-                  fontSize: 13,
-                  cursor: 'not-allowed',
-                }}
-              >
-                Add eval
-              </button>
-              <button className="hue-btn" onClick={onClose} style={drawerBtn}>
-                Cancel
-              </button>
-            </>
-          ) : (
-            <>
-              <button className="hue-btn" onClick={onClose} style={drawerBtn}>
-                Done
-              </button>
-              <span style={{ fontSize: 12, color: 'var(--ink-500)' }}>
-                Read-only — criteria ship in evals/criteria.seed.json
-              </span>
-              <span
-                title="Removing needs a criteria table"
-                style={{
-                  marginLeft: 'auto',
-                  fontSize: 13,
-                  fontWeight: 500,
-                  color: 'var(--ink-400)',
-                  cursor: 'not-allowed',
-                }}
-              >
-                Remove
-              </span>
-            </>
-          )}
+    <div style={{ background: '#fff', border: '1px solid var(--blue-500)', borderRadius: 8, marginTop: 16, overflow: 'hidden' }}>
+      <div style={{ padding: '13px 20px', background: 'var(--blue-025)', borderBottom: '1px solid var(--blue-100)' }}>
+        <h3 style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>New eval</h3>
+        <div style={{ fontSize: 12, color: 'var(--ink-600)', marginTop: 2 }}>
+          Graded like every other eval. Kept through regenerations and scope-of-work edits.
         </div>
       </div>
-    </>
+
+      <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,2fr) minmax(0,1fr)', gap: 12 }}>
+          <div>
+            <label style={lbl}>Title</label>
+            <input className="hue-field" style={field} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Callback promised is logged" />
+          </div>
+          <div>
+            <label style={lbl}>Clause ref</label>
+            <input className="hue-field" style={field} value={clauseRef} onChange={(e) => setClauseRef(e.target.value)} placeholder="S-2.6" />
+          </div>
+        </div>
+
+        <div>
+          <label style={lbl}>What it requires</label>
+          <input className="hue-field" style={field} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Where the agent promises a callback, a task must exist for it." />
+        </div>
+
+        <div>
+          <label style={lbl}>Passes when</label>
+          <textarea className="hue-field" style={{ ...field, minHeight: 62, resize: 'vertical', lineHeight: '19px' }} value={passDefinition} onChange={(e) => setPass(e.target.value)} placeholder="Written so two people reading the same call would agree." />
+        </div>
+
+        <div>
+          <label style={lbl}>Fails when</label>
+          <textarea className="hue-field" style={{ ...field, minHeight: 62, resize: 'vertical', lineHeight: '19px' }} value={failDefinition} onChange={(e) => setFail(e.target.value)} placeholder="The complement of the above, not a restatement of it." />
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12 }}>
+          <div>
+            <label style={lbl}>Severity</label>
+            <select className="hue-field" style={field} value={severity} onChange={(e) => setSeverity(e.target.value)}>
+              {['critical', 'high', 'medium', 'low'].map((v) => <option key={v} value={v}>{v}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={lbl}>Layer</label>
+            <select className="hue-field" style={field} value={layer} onChange={(e) => setLayer(e.target.value)}>
+              <option value="semantic">semantic — a judge reads the call</option>
+              <option value="deterministic">deterministic — needs code</option>
+            </select>
+          </div>
+          <div>
+            <label style={lbl}>Applies to</label>
+            <select className="hue-field" style={field} value={modality} onChange={(e) => setModality(e.target.value)}>
+              <option value="any">any channel</option>
+              <option value="voice">voice only</option>
+              <option value="text">text only</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Said before saving, not discovered afterwards. */}
+        {layer === 'deterministic' && (
+          <div style={{ fontSize: 12, color: 'var(--warning-700)', background: 'var(--warning-050)', borderRadius: 6, padding: '8px 11px', lineHeight: '18px' }}>
+            A deterministic eval has no code behind it, so nothing will run it. It is stored and shown
+            as “Not wired” rather than reported as a criterion your calls passed.
+          </div>
+        )}
+
+        {error && (
+          <div style={{ fontSize: 12, color: 'var(--danger-700)', background: 'var(--danger-050)', borderRadius: 6, padding: '8px 11px' }}>
+            {error}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', borderTop: '1px solid var(--ink-100)', paddingTop: 14, flexWrap: 'wrap' }}>
+          <button
+            className="hue-btn"
+            disabled={!ready || busy}
+            onClick={() => onSave({ title, clauseRef, description, passDefinition, failDefinition, severity, layer, modality })}
+            style={{
+              height: 36, padding: '0 16px', borderRadius: 6,
+              border: `1px solid ${ready && !busy ? 'var(--blue-500)' : 'var(--border-default)'}`,
+              background: ready && !busy ? 'var(--blue-500)' : 'var(--ink-100)',
+              color: ready && !busy ? '#fff' : 'var(--ink-400)',
+              fontWeight: 500, fontSize: 13, cursor: ready && !busy ? 'pointer' : 'not-allowed',
+              display: 'inline-flex', alignItems: 'center', gap: 8,
+            }}
+          >
+            {busy ? <span className="hue-spinner" aria-hidden="true" /> : null}
+            {busy ? 'Saving…' : 'Add eval'}
+          </button>
+          <button className="hue-btn" onClick={onCancel} disabled={busy} style={{ height: 36, padding: '0 14px', borderRadius: 6, border: '1px solid var(--border-default)', background: '#fff', fontWeight: 500, fontSize: 13, cursor: 'pointer' }}>
+            Cancel
+          </button>
+          <span style={{ fontSize: 12, color: 'var(--ink-500)' }}>
+            {ready ? 'Graded from the next run onwards.' : 'A title and both definitions are required.'}
+          </span>
+        </div>
+      </div>
+    </div>
   );
 }
-
-const drawerBtn: React.CSSProperties = {
-  height: 36,
-  padding: '0 16px',
-  borderRadius: 6,
-  border: '1px solid var(--border-default)',
-  background: '#fff',
-  fontWeight: 500,
-  fontSize: 13,
-  cursor: 'pointer',
-};
