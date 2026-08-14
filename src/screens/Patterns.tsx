@@ -508,9 +508,10 @@ function PatternCard({
               )}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 'auto' }}>
-              <button
+              <button className="hue-btn"
                 onClick={p.fix ? () => onOpenDeviation?.(p.representative.id) : runProposer}
                 disabled={proposing}
+                aria-busy={proposing}
                 style={{
                   height: 34,
                   padding: '0 15px',
@@ -531,6 +532,7 @@ function PatternCard({
                     <polyline points="20 6 9 17 4 12" />
                   </svg>
                 )}
+                {proposing && <span className="hue-spinner" aria-hidden="true" />}
                 {proposing ? 'Drafting the fix…' : applied ? 'Fix applied' : p.fix ? 'Review the fix' : 'Fix at source'}
               </button>
               <span style={{ fontSize: 12, color: 'var(--ink-600)' }}>
@@ -569,6 +571,12 @@ function PatternCard({
             </div>
             <span
               onClick={() => onOpenDeviation?.(p.representative.id)}
+              className="hue-link"
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') (() => onOpenDeviation?.(p.representative.id))();
+              }}
               style={{
                 fontSize: 12,
                 fontWeight: 500,

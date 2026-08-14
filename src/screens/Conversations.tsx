@@ -20,7 +20,6 @@ const FILTERS = ['All calls', 'Flagged', 'Passed', 'No SR created'] as const;
 type Filter = (typeof FILTERS)[number];
 
 const COLS = '104px minmax(240px,2fr) 130px 104px 74px 24px';
-const HOVER_BG = '#FAFAFA';
 
 const headCell: React.CSSProperties = {
   fontSize: 11,
@@ -141,7 +140,7 @@ export function Conversations({ onOpen }: { onOpen: (id: string) => void }) {
               <circle cx="11" cy="11" r="8" />
               <path d="m21 21-4.3-4.3" />
             </svg>
-            <input
+            <input className="hue-field"
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Search caller, site or SR"
@@ -156,7 +155,7 @@ export function Conversations({ onOpen }: { onOpen: (id: string) => void }) {
               }}
             />
           </div>
-          <select
+          <select className="hue-field"
             value={site}
             onChange={(e) => setSite(e.target.value)}
             style={{
@@ -194,7 +193,7 @@ export function Conversations({ onOpen }: { onOpen: (id: string) => void }) {
         {FILTERS.map((f) => {
           const on = filter === f;
           return (
-            <button
+            <button className="hue-btn"
               key={f}
               onClick={() => setFilter(f)}
               style={{
@@ -257,7 +256,7 @@ export function Conversations({ onOpen }: { onOpen: (id: string) => void }) {
             <p style={{ margin: '6px 0 14px', fontSize: 13, color: 'var(--ink-600)' }}>
               Nothing matches this search and filter.
             </p>
-            <button
+            <button className="hue-btn"
               onClick={clearAll}
               style={{
                 height: 38,
@@ -280,7 +279,6 @@ export function Conversations({ onOpen }: { onOpen: (id: string) => void }) {
 }
 
 function CallRow({ c, onOpen }: { c: ConversationView; onOpen: () => void }) {
-  const [hover, setHover] = useState(false);
   const ev = evalTone(c.evalStatus);
   const sent = sentimentTone(c.sentiment);
   // Live call logs usually have no caller name, so this is the phone number.
@@ -292,8 +290,7 @@ function CallRow({ c, onOpen }: { c: ConversationView; onOpen: () => void }) {
   return (
     <div
       onClick={onOpen}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
+      className="hue-row"
       onKeyDown={(e) => {
         if (e.key === 'Enter') onOpen();
       }}
@@ -307,7 +304,7 @@ function CallRow({ c, onOpen }: { c: ConversationView; onOpen: () => void }) {
         padding: '12px 16px',
         borderBottom: '1px solid var(--ink-100)',
         cursor: 'pointer',
-        background: hover ? HOVER_BG : '#fff',
+        background: '#fff',
       }}
     >
       <span

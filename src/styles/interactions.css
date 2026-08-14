@@ -1,0 +1,255 @@
+/* =========================================================
+   Interaction states.
+
+   The screens are a port of a static design file, so every visual property is
+   an inline style. Inline styles cannot express :hover, :active, :focus-visible
+   or :disabled — which is why, before this file, not one of the app's 32 buttons
+   reacted to a pointer.
+
+   Two techniques are used, deliberately:
+
+   1. Where a state does NOT need to change a colour the design already sets
+      inline (buttons), it uses `filter` and `transform`. Those properties are
+      never set inline, so no override is needed and nothing fights.
+   2. Where a state DOES need the design's own hover colour (rows, nav, tabs),
+      the rule carries `!important` — the only way to beat an inline style. Each
+      one uses a token the design already specifies for that state, never a new
+      colour.
+
+   Every value here comes from tokens.css. Timings are the design's own
+   --dur-fast (120ms) and --dur-base (180ms), so motion stays inside the
+   120-200ms band and does real work: it tells you the control heard you.
+   ========================================================= */
+
+/* ---------- Buttons, and anything that behaves like one ---------- */
+
+.hue-btn {
+  transition:
+    filter var(--dur-fast) var(--ease-standard),
+    transform var(--dur-fast) var(--ease-standard),
+    box-shadow var(--dur-fast) var(--ease-standard),
+    opacity var(--dur-fast) var(--ease-standard);
+}
+
+/* Darkens whatever the inline background is: a white button greys slightly, a
+   blue-500 button lands on roughly blue-600 — which is the hover the design
+   specifies for it. One rule, correct for both variants. */
+.hue-btn:hover:not(:disabled):not([aria-busy='true']) {
+  filter: brightness(0.94);
+}
+
+/* Pressed. The 1px drop is the whole point — it is the difference between a
+   button that responds and a picture of a button. */
+.hue-btn:active:not(:disabled):not([aria-busy='true']) {
+  filter: brightness(0.88);
+  transform: translateY(1px);
+}
+
+.hue-btn:disabled,
+.hue-btn[aria-disabled='true'] {
+  opacity: 0.5;
+  cursor: not-allowed;
+  filter: none;
+  transform: none;
+}
+
+/* Busy: the control is working. Dimmed and un-pressable, but not greyed out
+   like a disabled control — the difference matters when you are waiting. */
+.hue-btn[aria-busy='true'] {
+  cursor: progress;
+  opacity: 0.75;
+}
+
+/* Touch targets. The design's buttons are 32-38px, which is right for a
+   pointer; on a coarse pointer they grow to the 40px minimum without moving
+   anything on a desktop. */
+@media (pointer: coarse) {
+  .hue-btn,
+  .hue-icon-btn {
+    min-height: 40px;
+    min-width: 40px;
+  }
+}
+
+/* ---------- Clickable rows, cards and list items ---------- */
+
+.hue-row {
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast) var(--ease-standard),
+    box-shadow var(--dur-fast) var(--ease-standard);
+}
+
+/* --ink-050 (#FAFAFA) is the hover the design uses for every table row. */
+.hue-row:hover {
+  background-color: var(--ink-050) !important;
+}
+
+.hue-row:active {
+  background-color: var(--blue-025) !important;
+}
+
+/* Keyboard parity: a row you can Tab to must show where you are, and the
+   global focus ring is invisible against a row that fills its container. */
+.hue-row:focus-visible {
+  outline: 2px solid var(--blue-500);
+  outline-offset: -2px;
+  background-color: var(--blue-025) !important;
+}
+
+/* A card that opens something. Lifts rather than tints, since cards sit on the
+   app background rather than in a list. */
+.hue-card-click {
+  cursor: pointer;
+  transition:
+    box-shadow var(--dur-base) var(--ease-standard),
+    border-color var(--dur-base) var(--ease-standard),
+    transform var(--dur-base) var(--ease-standard);
+}
+
+.hue-card-click:hover {
+  box-shadow: var(--shadow-md);
+  border-color: var(--blue-100) !important;
+}
+
+.hue-card-click:active {
+  transform: translateY(1px);
+}
+
+.hue-card-click:focus-visible {
+  outline: 2px solid var(--blue-500);
+  outline-offset: 2px;
+}
+
+/* ---------- Sidebar navigation ---------- */
+
+.hue-nav {
+  transition:
+    background-color var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard);
+}
+
+/* Only the inactive items react — the current page already reads as selected,
+   and tinting it on hover would blur which one you are on. */
+.hue-nav:not([aria-current='page']):hover {
+  background-color: var(--blue-025) !important;
+  color: var(--blue-600) !important;
+}
+
+.hue-nav:focus-visible {
+  outline: 2px solid var(--blue-500);
+  outline-offset: -2px;
+}
+
+/* ---------- Inputs, selects, textareas ---------- */
+
+.hue-field {
+  transition:
+    border-color var(--dur-fast) var(--ease-standard),
+    box-shadow var(--dur-fast) var(--ease-standard);
+}
+
+.hue-field:hover:not(:focus):not(:disabled) {
+  border-color: var(--ink-400) !important;
+}
+
+.hue-field:focus {
+  border-color: var(--blue-500) !important;
+  box-shadow: var(--shadow-focus);
+  outline: none;
+}
+
+/* Filled reads differently from empty, so a search with something in it is
+   obvious at a glance rather than only when you read the text. */
+.hue-field:not(:placeholder-shown) {
+  border-color: var(--ink-400);
+}
+
+.hue-field:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* ---------- Tabs ---------- */
+
+.hue-tab {
+  transition:
+    background-color var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard);
+}
+
+.hue-tab:not([aria-selected='true']):hover {
+  background-color: var(--blue-025) !important;
+  color: var(--blue-600) !important;
+}
+
+.hue-tab:focus-visible {
+  outline: 2px solid var(--blue-500);
+  outline-offset: -2px;
+}
+
+/* ---------- Text links and link-styled spans ---------- */
+
+.hue-link {
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-standard);
+}
+
+.hue-link:hover {
+  text-decoration: underline;
+}
+
+.hue-link:focus-visible {
+  outline: 2px solid var(--blue-500);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+/* ---------- Pending spinner, for controls that are working ---------- */
+
+@keyframes hue-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.hue-spinner {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 999px;
+  animation: hue-spin 640ms linear infinite;
+  flex: 0 0 13px;
+}
+
+/* ---------- Reduced motion ----------
+   Someone who asks for less motion still needs to know the control reacted, so
+   the colour and brightness changes stay; only movement and spin are dropped. */
+@media (prefers-reduced-motion: reduce) {
+  .hue-btn,
+  .hue-row,
+  .hue-card-click,
+  .hue-nav,
+  .hue-field,
+  .hue-tab,
+  .hue-link {
+    transition-duration: 1ms;
+  }
+
+  .hue-btn:active:not(:disabled),
+  .hue-card-click:active {
+    transform: none;
+  }
+
+  .hue-spinner {
+    animation: none;
+    border-right-color: currentColor;
+    opacity: 0.6;
+  }
+
+  .skq {
+    animation: none;
+  }
+}

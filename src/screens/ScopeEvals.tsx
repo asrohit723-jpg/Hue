@@ -338,10 +338,10 @@ export function ScopeEvals() {
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ fontSize: 12, color: 'var(--ink-600)' }}>Version</span>
-            <select disabled value="—" style={{ ...selectStyle, height: 34, width: 112, cursor: 'not-allowed', color: 'var(--ink-400)' }}>
+            <select className="hue-field" disabled value="—" style={{ ...selectStyle, height: 34, width: 112, cursor: 'not-allowed', color: 'var(--ink-400)' }}>
               <option value="—">—</option>
             </select>
-            <button
+            <button className="hue-btn"
               onClick={() => {
                 setEditingDoc(true);
                 setDraft('');
@@ -369,7 +369,7 @@ export function ScopeEvals() {
               Paste the scope of work exactly as written in your helpdesk contract. Plain paragraphs
               are fine — eval criteria are drafted from the text on save.
             </div>
-            <textarea
+            <textarea className="hue-field"
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               placeholder="Paste the scope of work paragraph here…"
@@ -389,7 +389,7 @@ export function ScopeEvals() {
               }}
             />
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14, flexWrap: 'wrap' }}>
-              <button
+              <button className="hue-btn"
                 disabled
                 title="There is nowhere to store the document yet"
                 style={{
@@ -406,7 +406,7 @@ export function ScopeEvals() {
               >
                 Save
               </button>
-              <button
+              <button className="hue-btn"
                 onClick={() => {
                   setEditingDoc(false);
                   setDraft('');
@@ -553,7 +553,7 @@ export function ScopeEvals() {
               <circle cx="11" cy="11" r="8" />
               <line x1="21" y1="21" x2="16.65" y2="16.65" />
             </svg>
-            <input
+            <input className="hue-field"
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Search"
@@ -569,14 +569,14 @@ export function ScopeEvals() {
               }}
             />
           </div>
-          <select value={filter} onChange={(e) => setFilter(e.target.value)} style={{ ...selectStyle, width: 150 }}>
+          <select className="hue-field" value={filter} onChange={(e) => setFilter(e.target.value)} style={{ ...selectStyle, width: 150 }}>
             {FILTERS.map((f) => (
               <option key={f} value={f}>
                 {f}
               </option>
             ))}
           </select>
-          <button
+          <button className="hue-btn"
             disabled
             title="Importing needs somewhere to store criteria"
             style={{
@@ -594,7 +594,7 @@ export function ScopeEvals() {
           >
             Import
           </button>
-          <button
+          <button className="hue-btn"
             onClick={() => {
               setCreating(true);
               setOpenEval(null);
@@ -697,7 +697,6 @@ function EvalRow({
   rate: number | null;
   onOpen: () => void;
 }) {
-  const [hover, setHover] = useState(false);
   // "Active" in the seed means configured; a criterion nothing checks is inert
   // whatever the flag says, and the table shows that rather than the flag.
   const status = !c.active
@@ -709,8 +708,12 @@ function EvalRow({
   return (
     <div
       onClick={onOpen}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
+      className="hue-row"
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') onOpen();
+      }}
       style={{
         display: 'grid',
         gridTemplateColumns: COLS,
@@ -719,7 +722,7 @@ function EvalRow({
         height: 46,
         borderBottom: '1px solid var(--ink-100)',
         cursor: 'pointer',
-        background: hover ? 'var(--blue-025)' : '#fff',
+        background: '#fff',
       }}
     >
       <span
@@ -842,7 +845,7 @@ function EvalDrawer({
 
         <div style={{ flex: 1, overflow: 'auto', padding: '20px 22px' }}>
           <div style={{ ...microLabel, marginBottom: 6 }}>Criterion</div>
-          <textarea
+          <textarea className="hue-field"
             value={text}
             onChange={(e) => setText(e.target.value)}
             placeholder="Describe the rule in plain English, e.g. “Always confirm the caller's mobile number”"
@@ -870,7 +873,7 @@ function EvalDrawer({
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 18 }}>
             <div>
               <div style={{ ...microLabel, marginBottom: 6 }}>Category</div>
-              <select
+              <select className="hue-field"
                 defaultValue={c ? familyOf(c.id) : 'Added by your team'}
                 style={{ ...selectStyle, width: '100%', height: 34 }}
               >
@@ -975,7 +978,7 @@ function EvalDrawer({
         >
           {creating ? (
             <>
-              <button
+              <button className="hue-btn"
                 disabled
                 title="Criteria ship in a bundled file — there is no table to add one to"
                 style={{
@@ -992,13 +995,13 @@ function EvalDrawer({
               >
                 Add eval
               </button>
-              <button onClick={onClose} style={drawerBtn}>
+              <button className="hue-btn" onClick={onClose} style={drawerBtn}>
                 Cancel
               </button>
             </>
           ) : (
             <>
-              <button onClick={onClose} style={drawerBtn}>
+              <button className="hue-btn" onClick={onClose} style={drawerBtn}>
                 Done
               </button>
               <span style={{ fontSize: 12, color: 'var(--ink-500)' }}>

@@ -47,8 +47,10 @@ function NavItem({
   return (
     <div
       onClick={onClick}
+      className="hue-nav"
       role="button"
       tabIndex={0}
+      aria-current={active ? 'page' : undefined}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') onClick();
       }}
@@ -374,7 +376,7 @@ export function Shell({ me }: { me: CurrentUser }) {
               <circle cx="11" cy="11" r="8" />
               <path d="m21 21-4.3-4.3" />
             </svg>
-            <input
+            <input className="hue-field"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onFocus={() => setScreen('convos')}
@@ -417,7 +419,7 @@ export function Shell({ me }: { me: CurrentUser }) {
                 <span style={{ fontSize: 11, color: 'var(--ink-500)' }}>{me.user.email}</span>
               </div>
             </div>
-            <button
+            <button className="hue-btn"
               onClick={logout}
               title="Sign out"
               aria-label="Sign out"

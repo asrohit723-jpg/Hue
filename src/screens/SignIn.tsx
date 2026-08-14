@@ -125,7 +125,7 @@ export function SignIn({ onSignIn, error }: { onSignIn: () => void; error?: stri
                 </div>
               )}
 
-              <button
+              <button className="hue-btn"
                 onClick={onSignIn}
                 style={{
                   height: 44,

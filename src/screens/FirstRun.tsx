@@ -123,7 +123,7 @@ export function FirstRun({ sites }: { sites: string[] }) {
                   {s.detail}
                 </p>
               </div>
-              <button
+              <button className="hue-btn"
                 disabled={s.done}
                 style={{
                   height: 36,

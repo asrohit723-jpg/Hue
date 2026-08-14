@@ -27,7 +27,6 @@ import { page } from '../lib/layout';
 const SEV_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
 
 const COLS = '92px minmax(220px,1.9fr) 72px minmax(150px,1.1fr) 96px 116px 24px';
-const HOVER_BG = '#FAFAFA';
 
 const SEVERITY_OPTIONS = ['All severities', 'critical', 'high', 'medium', 'low'];
 const ROOT_OPTIONS = ['All causes', 'agent', 'data', 'sow', 'unknown'];
@@ -227,7 +226,7 @@ export function Interventions({
             <circle cx="11" cy="11" r="8" />
             <path d="m21 21-4.3-4.3" />
           </svg>
-          <input
+          <input className="hue-field"
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Search deviations"
@@ -246,7 +245,7 @@ export function Interventions({
         {selects.map((s) => {
           const active = s.value !== s.dflt;
           return (
-            <select
+            <select className="hue-field"
               key={s.key}
               value={s.value}
               onChange={(e) => s.set(e.target.value)}
@@ -282,7 +281,7 @@ export function Interventions({
         })}
 
         {filtered && (
-          <button
+          <button className="hue-btn"
             onClick={clearFilters}
             style={{
               height: 36,
@@ -364,7 +363,7 @@ export function Interventions({
             <p style={{ margin: '6px 0 14px', fontSize: 13, color: 'var(--ink-600)' }}>
               Widen the severity or root cause, or clear the search.
             </p>
-            <button
+            <button className="hue-btn"
               onClick={clearFilters}
               style={{
                 height: 38,
@@ -413,7 +412,7 @@ export function Interventions({
               Every call was checked against your scope of work and passed. Nothing needs your
               attention.
             </p>
-            <button
+            <button className="hue-btn"
               onClick={() => onBrowseCalls?.()}
               style={{
                 height: 38,
@@ -444,7 +443,6 @@ function Row({
   criterionFull: string;
   onOpen: () => void;
 }) {
-  const [hover, setHover] = useState(false);
   const sev = severityTone(d.severity);
   const rc = rootCauseTone(d.rootCause || 'unknown');
   const st = statusOf(d.status);
@@ -455,8 +453,7 @@ function Row({
   return (
     <div
       onClick={onOpen}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
+      className="hue-row"
       onKeyDown={(e) => {
         if (e.key === 'Enter') onOpen();
       }}
@@ -470,7 +467,7 @@ function Row({
         padding: '12px 16px',
         borderBottom: '1px solid var(--ink-100)',
         cursor: 'pointer',
-        background: hover ? HOVER_BG : '#fff',
+        background: '#fff',
       }}
     >
       <span

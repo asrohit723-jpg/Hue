@@ -83,7 +83,7 @@ export function Button({
   disabled?: boolean;
 }) {
   return (
-    <button
+    <button className="hue-btn"
       onClick={onClick}
       disabled={disabled}
       style={{
@@ -106,7 +106,7 @@ export function Button({
 
 export function BackLink({ onClick, children }: { onClick: () => void; children: ReactNode }) {
   return (
-    <button
+    <button className="hue-btn"
       onClick={onClick}
       style={{
         display: 'flex',

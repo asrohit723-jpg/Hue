@@ -264,7 +264,7 @@ export function InterventionDetail({
           marginBottom: 14,
         }}
       >
-        <span onClick={onBack} style={{ cursor: 'pointer', color: 'var(--blue-500)', fontWeight: 500 }}>
+        <span onClick={onBack} className="hue-link" role="button" tabIndex={0} style={{ cursor: 'pointer', color: 'var(--blue-500)', fontWeight: 500 }}>
           Interventions
         </span>
         <span>/</span>
@@ -340,7 +340,7 @@ export function InterventionDetail({
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button
+          <button className="hue-btn"
             onClick={() => onOpenCall(dev.conversationId)}
             style={{
               height: 36,
@@ -423,6 +423,12 @@ export function InterventionDetail({
         ))}
         <span
           onClick={() => onOpenCall(dev.conversationId)}
+          className="hue-link"
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') (() => onOpenCall(dev.conversationId))();
+          }}
           style={{
             marginLeft: 'auto',
             fontSize: 13,
@@ -725,6 +731,12 @@ function GlanceCell({
       {onLink && (
         <span
           onClick={onLink}
+          className="hue-link"
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') (onLink)();
+          }}
           style={{
             display: 'inline-block',
             marginTop: 7,
@@ -940,9 +952,10 @@ function FixTheAgent({
               flexWrap: 'wrap',
             }}
           >
-            <button
+            <button className="hue-btn"
               onClick={corr ? onApprove : onAnalyse}
               disabled={Boolean(act.busy)}
+                aria-busy={Boolean(act.busy)}
               style={{
                 height: 36,
                 padding: '0 16px',
@@ -956,6 +969,7 @@ function FixTheAgent({
                 opacity: act.busy ? 0.7 : 1,
               }}
             >
+              {act.busy && <span className="hue-spinner" aria-hidden="true" />}
               {act.busy === 'classify'
                 ? 'Classifying… (~15s)'
                 : act.busy === 'propose'
@@ -967,9 +981,10 @@ function FixTheAgent({
                       : 'Classify & draft fix'}
             </button>
             {corr && (
-              <button
+              <button className="hue-btn"
                 onClick={onAnalyse}
                 disabled={Boolean(act.busy)}
+                aria-busy={Boolean(act.busy)}
                 style={secondaryBtn}
               >
                 Redraft
@@ -1026,7 +1041,8 @@ function FixTheAgent({
         )}
 
         {state === 'applied' && (
-          <button onClick={onVerify} disabled={Boolean(act.busy)} style={secondaryBtn}>
+          <button className="hue-btn" onClick={onVerify} disabled={Boolean(act.busy)}
+                aria-busy={Boolean(act.busy)} style={secondaryBtn}>
             {act.busy === 'verify' ? 'Verifying…' : 'Verify against the record'}
           </button>
         )}

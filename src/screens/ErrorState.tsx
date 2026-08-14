@@ -44,7 +44,7 @@ export function ErrorState({ message, onRetry }: { message: string; onRetry: () 
           <span>{message}</span>
         </div>
         <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-          <button
+          <button className="hue-btn"
             onClick={onRetry}
             style={{
               height: 38,

@@ -298,6 +298,12 @@ export function ConversationDetail({
       >
         <span
           onClick={onBack}
+          className="hue-link"
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') (onBack)();
+          }}
           style={{ cursor: 'pointer', color: 'var(--blue-500)', fontWeight: 500 }}
         >
           Conversations
@@ -350,10 +356,11 @@ export function ConversationDetail({
           </span>
           {/* Grading is a deliberate act, not a side effect of opening a call —
               the count and the compliance score must hold still while browsing. */}
-          <button
+          <button className="hue-btn"
             onClick={runEvals}
             disabled={Boolean(grading)}
-            title="Run the semantic judges against this call"
+            aria-busy={Boolean(grading)}
+            title="Run the semantic judges and the call analyst against this call"
             style={{
               height: 36,
               padding: '0 14px',
@@ -374,10 +381,17 @@ export function ConversationDetail({
               <path d="M9 11l3 3L22 4" />
               <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
             </svg>
-            {grading ? `Grading ${grading}…` : 'Run evals'}
+            {grading ? (
+              <>
+                <span className="hue-spinner" aria-hidden="true" />
+                Grading {grading}…
+              </>
+            ) : (
+              'Run evals'
+            )}
           </button>
           {firstFinding && (
-            <button
+            <button className="hue-btn"
               onClick={() => onOpenDeviation(firstFinding.id)}
               style={{
                 height: 36,
@@ -608,7 +622,7 @@ function RecordingBar({
         gap: 14,
       }}
     >
-      <button
+      <button className="hue-btn"
         disabled
         title={has ? 'Playback is not wired yet' : 'No recording for this call'}
         aria-label="Play recording"
@@ -643,7 +657,7 @@ function RecordingBar({
       >
         {has ? `0:00 / ${durationLabel}` : 'No recording'}
       </span>
-      <button
+      <button className="hue-btn"
         disabled={!has}
         title={has ? `Recording file ${recordingFileId}` : 'No recording for this call'}
         aria-label="Download recording"
@@ -704,6 +718,9 @@ function QualityCard({
           <button
             key={k}
             onClick={() => onTab(k)}
+            className="hue-btn hue-tab"
+            role="tab"
+            aria-selected={tab === k}
             style={{
               flex: 1,
               height: 36,
@@ -1468,7 +1485,7 @@ function CmmsPanel({
             </span>
           </div>
           {onOpenIntervention && (
-            <button
+            <button className="hue-btn"
               onClick={onOpenIntervention}
               style={{
                 height: 34,

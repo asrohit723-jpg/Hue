@@ -33,7 +33,6 @@ const ROW_CAP = 200;
 const CARD_BORDER = '#E1E8F2';
 const HERO_INK = '#0C447C';
 const SPARK_STROKE = '#378ADD';
-const HOVER_BG = '#FAFAFA';
 
 const card: React.CSSProperties = {
   background: '#fff',
@@ -616,7 +615,7 @@ export function Overview({
         </div>
 
         <div style={{ display: 'flex', gap: 8 }}>
-          <button
+          <button className="hue-btn"
             onClick={exportExcel}
             style={{
               height: 36,
@@ -719,7 +718,13 @@ export function Overview({
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div
             onClick={() => onNavigate?.('ints')}
-            style={{ ...card, padding: '14px 16px', cursor: 'pointer' }}
+            className="hue-card-click"
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') onNavigate?.('ints');
+            }}
+            style={{ ...card, padding: '14px 16px' }}
           >
             <div style={kpiLabel}>Open interventions</div>
             <div style={{ ...kpiValue, color: 'var(--danger-500)' }}>{v.open.length}</div>
@@ -907,7 +912,7 @@ export function Overview({
             }}
           >
             <h3 style={panelH3}>Recent interventions</h3>
-            <span onClick={() => onNavigate?.('ints')} style={linkish}>
+            <span onClick={() => onNavigate?.('ints')} className="hue-link" role="button" tabIndex={0} style={linkish}>
               View all
             </span>
           </div>
@@ -976,7 +981,7 @@ export function Overview({
         <div>
           <div style={kpiLabel}>Scope of work</div>
           <div style={{ fontSize: 13, marginTop: 4 }}>{criteriaCount} criteria active</div>
-          <span onClick={() => onNavigate?.('scope')} style={linkish}>
+          <span onClick={() => onNavigate?.('scope')} className="hue-link" role="button" tabIndex={0} style={linkish}>
             Review criteria
           </span>
         </div>
@@ -987,7 +992,7 @@ export function Overview({
           <div style={{ fontSize: 13, marginTop: 4 }}>
             {v.open.length} queued · delivery not wired
           </div>
-          <span onClick={() => onNavigate?.('notify')} style={linkish}>
+          <span onClick={() => onNavigate?.('notify')} className="hue-link" role="button" tabIndex={0} style={linkish}>
             Change routing
           </span>
         </div>
@@ -996,14 +1001,14 @@ export function Overview({
           <div style={{ fontSize: 13, marginTop: 4 }}>
             {v.recurring} {v.recurring === 1 ? 'pattern' : 'patterns'} tracked
           </div>
-          <span onClick={() => onNavigate?.('patterns')} style={linkish}>
+          <span onClick={() => onNavigate?.('patterns')} className="hue-link" role="button" tabIndex={0} style={linkish}>
             Fix at source
           </span>
         </div>
         <div>
           <div style={kpiLabel}>Export</div>
           <div style={{ fontSize: 13, marginTop: 4 }}>Calls, deviations and corrections</div>
-          <span onClick={exportExcel} style={linkish}>
+          <span onClick={exportExcel} className="hue-link" role="button" tabIndex={0} style={linkish}>
             {exportLabel}
           </span>
         </div>
@@ -1036,7 +1041,7 @@ function PillButton({
   children: React.ReactNode;
 }) {
   return (
-    <button
+    <button className="hue-btn"
       onClick={onClick}
       style={{
         height: 36,
@@ -1131,12 +1136,15 @@ function MenuRow({
 
 /** A recent-intervention row, with the design's hover tint. */
 function Row({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
-  const [hover, setHover] = useState(false);
   return (
     <div
       onClick={onClick}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
+      className="hue-row"
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') onClick();
+      }}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -1144,7 +1152,7 @@ function Row({ onClick, children }: { onClick: () => void; children: React.React
         padding: '12px 20px',
         borderBottom: '1px solid var(--ink-100)',
         cursor: 'pointer',
-        background: hover ? HOVER_BG : '#fff',
+        background: '#fff',
       }}
     >
       {children}
