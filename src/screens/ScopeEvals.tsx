@@ -95,10 +95,9 @@ const FILTERS = ['All evals', 'From scope of work', 'Added / imported', 'Seeded'
 
 
 
-export function ScopeEvals() {
+export function ScopeEvals({ search = '' }: { search?: string }) {
   const criteria = (seed as { criteria: SeedCriterion[] }).criteria;
 
-  const [q, setQ] = useState('');
   const [filter, setFilter] = useState(FILTERS[0]);
   const [editingDoc, setEditingDoc] = useState(false);
   const [draft, setDraft] = useState('');
@@ -309,7 +308,7 @@ export function ScopeEvals() {
   }, [criteria, sow, failures, evaluatedCalls]);
 
   const evalRows = useMemo(() => {
-    const needle = q.trim().toLowerCase();
+    const needle = search.trim().toLowerCase();
     return allEvals.filter((e) => {
       if (filter === 'From scope of work' && e.origin !== 'sow') return false;
       if (filter === 'Added / imported' && e.origin !== 'custom') return false;
@@ -321,7 +320,7 @@ export function ScopeEvals() {
         .toLowerCase()
         .includes(needle);
     });
-  }, [allEvals, q, filter]);
+  }, [allEvals, search, filter]);
 
 
   const wired = criteria.filter((c) => WIRED_CRITERIA.has(c.id)).length;
@@ -774,23 +773,6 @@ export function ScopeEvals() {
             </div>
           </div>
 
-          <div style={{ position: 'relative' }}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--ink-500)" strokeWidth="2" strokeLinecap="round" style={{ position: 'absolute', left: 10, top: 9 }}>
-              <circle cx="11" cy="11" r="8" />
-              <line x1="21" y1="21" x2="16.65" y2="16.65" />
-            </svg>
-            <input
-              className="hue-field"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Search"
-              style={{
-                width: 180, height: 32, border: '1px solid var(--border-default)',
-                borderRadius: 6, padding: '0 10px 0 30px', fontSize: 13, outline: 'none',
-                boxSizing: 'border-box',
-              }}
-            />
-          </div>
 
           <select
             className="hue-field"

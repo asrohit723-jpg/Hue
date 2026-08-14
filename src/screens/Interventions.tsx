@@ -56,14 +56,16 @@ const headCell: React.CSSProperties = { ...truncate };
 export function Interventions({
   onOpen,
   onBrowseCalls,
+  search = '',
 }: {
   onOpen: (deviationId: string) => void;
   onBrowseCalls?: () => void;
+  /** The one search box, in the top bar. This screen no longer has its own. */
+  search?: string;
 }) {
   const [items, setItems] = useState<DeviationWithEvidence[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
-  const [q, setQ] = useState('');
   const [sev, setSev] = useState(SEVERITY_OPTIONS[0]);
   const [root, setRoot] = useState(ROOT_OPTIONS[0]);
   const [status, setStatus] = useState(STATUS_OPTIONS[0]);
@@ -92,7 +94,7 @@ export function Interventions({
   }, []);
 
   const rows = useMemo(() => {
-    const needle = q.trim().toLowerCase();
+    const needle = search.trim().toLowerCase();
     return (items ?? [])
       .filter((d) => {
         if (sev !== SEVERITY_OPTIONS[0] && d.severity !== sev) return false;
@@ -112,7 +114,7 @@ export function Interventions({
           .some((v) => String(v).toLowerCase().includes(needle));
       })
       .sort((a, b) => (SEV_ORDER[a.severity] ?? 9) - (SEV_ORDER[b.severity] ?? 9));
-  }, [items, q, sev, root, status, criterionText]);
+  }, [items, search, sev, root, status, criterionText]);
 
   if (error) {
     return (
@@ -124,13 +126,15 @@ export function Interventions({
   if (!items) return <BootSkeleton label="Loading findings…" />;
 
   const filtered =
-    q.trim() !== '' ||
+    search.trim() !== '' ||
     sev !== SEVERITY_OPTIONS[0] ||
     root !== ROOT_OPTIONS[0] ||
     status !== STATUS_OPTIONS[0];
 
   const clearFilters = () => {
-    setQ('');
+    // The search lives in the top bar now, so this clears only what this
+    // screen owns — clearing someone's typed query from here would be reaching
+    // outside the panel the button sits in.
     setSev(SEVERITY_OPTIONS[0]);
     setRoot(ROOT_OPTIONS[0]);
     setStatus(STATUS_OPTIONS[0]);
@@ -212,35 +216,6 @@ export function Interventions({
       <div
         style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '16px 0 0', flexWrap: 'wrap' }}
       >
-        <div style={{ position: 'relative' }}>
-          <svg
-            style={{ position: 'absolute', left: 11, top: 11 }}
-            width="15"
-            height="15"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="var(--ink-500)"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-          >
-            <circle cx="11" cy="11" r="8" />
-            <path d="m21 21-4.3-4.3" />
-          </svg>
-          <input className="hue-field"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search deviations"
-            style={{
-              width: 240,
-              height: 36,
-              padding: '0 12px 0 34px',
-              border: '1px solid var(--border-default)',
-              borderRadius: 6,
-              fontSize: 13,
-              outline: 'none',
-            }}
-          />
-        </div>
 
         {selects.map((s) => {
           const active = s.value !== s.dflt;

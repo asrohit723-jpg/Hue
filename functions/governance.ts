@@ -1738,12 +1738,30 @@ server.addHandler({
     const awaitingIngest =
       available === null ? null : Math.max(available - stored, 0);
 
+    // When a call was last PULLED IN. Not "when the job last ran" — the app
+    // still cannot see that — but a real stamp for a real event: ingest writes
+    // tagged_at on every conversation it stores. Empty before anything has been
+    // ingested, which is a state the bar reports rather than papers over.
+    const lastIngestAt = String(
+      db.query(
+        `select max(tagged_at) as t from conversation_channels where id <> '__seed__'`,
+      ).rows[0]?.t ?? '',
+    );
+
+    const openDeviations = Number(
+      db.query(
+        "select count(*) as n from deviations where id <> '__seed__' and status = 'open'",
+      ).rows[0]?.n ?? 0,
+    );
+
     return {
       stored,
       available,
       reachable,
       awaitingIngest,
       awaitingGrading,
+      lastIngestAt,
+      openDeviations,
       graded: stored - awaitingGrading,
       // Deliberately NOT a countdown: the app cannot see when the job last
       // fired, so anything more precise than the interval would be invented.

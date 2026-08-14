@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, logout, type CurrentUser } from '../lib/vibe';
 import { HEADER_H } from '../lib/layout';
 import { useHashRoute, type ScreenId } from '../lib/route';
@@ -16,6 +16,36 @@ import { Patterns } from './Patterns';
  * allowed to drift apart.
  */
 export type { ScreenId };
+
+
+/** What the bar calls each screen. The route decides; nothing is stored. */
+const SECTION_TITLE: Record<ScreenId, string> = {
+  overview: 'Overview',
+  convos: 'Call logs',
+  convo: 'Call',
+  ints: 'Interventions',
+  int: 'Intervention',
+  patterns: 'Patterns',
+  scope: 'Scope of work & evals',
+};
+
+/** Screens the search actually filters. Elsewhere, typing takes you to one. */
+const SEARCHABLE = new Set<ScreenId>(['convos', 'ints', 'scope']);
+
+/**
+ * How long ago, in words, from a real stamp. Empty in, empty out — the bar
+ * says nothing rather than guessing when nothing has been ingested yet.
+ */
+function ago(iso: string): string {
+  const then = Date.parse(iso);
+  if (!Number.isFinite(then)) return '';
+  const mins = Math.round((Date.now() - then) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.round(hrs / 24)}d ago`;
+}
 
 const ACTIVE_BG = 'var(--blue-025)';
 const ACTIVE_FG = 'var(--blue-600)';
@@ -107,6 +137,8 @@ export function Shell({ me }: { me: CurrentUser }) {
   const deviationId = screen === 'int' ? route.id : null;
 
   const [query, setQuery] = useState('');
+  const searchRef = useRef<HTMLInputElement | null>(null);
+  const [sync, setSync] = useState<Awaited<ReturnType<typeof api.syncStatus>> | null>(null);
   const [openDeviations, setOpenDeviations] = useState<number | null>(null);
   const [callCount, setCallCount] = useState<number | null>(null);
 
@@ -115,6 +147,40 @@ export function Shell({ me }: { me: CurrentUser }) {
   const [refreshSignal, setRefreshSignal] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshNote, setRefreshNote] = useState<string | null>(null);
+
+  /**
+   * What the bar reports. Read once on load and again after a refresh — the
+   * counts and the freshness stamp are the only things up here that claim to be
+   * current, so they are the only things that re-read.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .syncStatus()
+      .then((s) => {
+        if (!cancelled) setSync(s);
+      })
+      .catch(() => {
+        // The bar degrades to saying nothing rather than to a guess.
+        if (!cancelled) setSync(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshSignal]);
+
+  /** Focus the search from anywhere. */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        searchRef.current?.focus();
+        searchRef.current?.select();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   /** Same shape the screens already call, now writing the address bar. */
   const setScreen = (next: ScreenId) => navigate({ screen: next, id: null });
@@ -417,21 +483,13 @@ export function Shell({ me }: { me: CurrentUser }) {
               </svg>
             </button>
           </div>
-
-          {/* The org as the session actually reports it. "Ocean's 3" above is
-              the ACCOUNT's display name — the CMMS records it as the user on
-              every request this account creates — so naming it the org here
-              would be putting a label on the wrong fact. If the session ever
-              carries a real org name, this shows it instead of the id. */}
-          <div style={{ fontSize: 11, color: 'var(--ink-500)', marginTop: 9, paddingLeft: 2 }}>
-            {me.org.name || `Org ${me.org.orgId}`}
-          </div>
         </div>
       </div>
 
       {/* ---------------- MAIN ---------------- */}
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-        {/* TOP BAR */}
+        {/* TOP BAR — three zones, each carrying something real:
+             the section you are in, the search, and the state of the data. */}
         <div
           style={{
             height: HEADER_H,
@@ -444,9 +502,22 @@ export function Shell({ me }: { me: CurrentUser }) {
             padding: '0 24px',
           }}
         >
-          <div style={{ flex: 1, maxWidth: 520, position: 'relative' }}>
+          <span
+            style={{
+              fontSize: 14,
+              fontWeight: 600,
+              color: 'var(--ink-900)',
+              whiteSpace: 'nowrap',
+              flex: '0 0 auto',
+            }}
+          >
+            {SECTION_TITLE[screen]}
+          </span>
+
+          {/* Capped, so it stops taking the whole middle of the bar. */}
+          <div style={{ flex: 1, maxWidth: 420, position: 'relative', minWidth: 0 }}>
             <svg
-              style={{ position: 'absolute', left: 12, top: 11 }}
+              style={{ position: 'absolute', left: 12, top: 11, pointerEvents: 'none' }}
               width="16"
               height="16"
               viewBox="0 0 24 24"
@@ -458,33 +529,94 @@ export function Shell({ me }: { me: CurrentUser }) {
               <circle cx="11" cy="11" r="8" />
               <path d="m21 21-4.3-4.3" />
             </svg>
-            <input className="hue-field"
+            <input
+              ref={searchRef}
+              className="hue-field"
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onFocus={() => setScreen('convos')}
-              placeholder="Search callers, sites, SR numbers"
+              onChange={(e) => {
+                setQuery(e.target.value);
+                // Typing is what moves you, not focusing. Clicking the box used
+                // to teleport you off whatever you were reading.
+                if (e.target.value && !SEARCHABLE.has(screen)) setScreen('convos');
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') setQuery('');
+              }}
+              placeholder="Search callers, sites, SR numbers…"
+              aria-label="Search"
               style={{
                 width: '100%',
                 height: 38,
-                padding: '0 14px 0 36px',
+                padding: '0 58px 0 36px',
                 border: '1px solid transparent',
                 borderRadius: 999,
                 fontSize: 13,
                 color: 'var(--ink-900)',
                 outline: 'none',
                 background: 'var(--ink-050)',
+                boxSizing: 'border-box',
               }}
             />
+            {/* Hidden once there is text, since it is a hint, not a label. */}
+            {!query && (
+              <span
+                style={{
+                  position: 'absolute',
+                  right: 10,
+                  top: 9,
+                  pointerEvents: 'none',
+                  fontSize: 11,
+                  fontWeight: 500,
+                  color: 'var(--ink-500)',
+                  background: '#fff',
+                  border: '1px solid var(--border-default)',
+                  borderRadius: 5,
+                  padding: '2px 6px',
+                  fontFamily: 'var(--font-mono)',
+                }}
+              >
+                ⌘K
+              </span>
+            )}
           </div>
 
-          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 14 }}>
-            {/* What the last press did. Held next to the button rather than
-                announced in a banner — it is a footnote, not a finding. */}
+          <div
+            style={{
+              marginLeft: 'auto',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 14,
+              flex: '0 0 auto',
+            }}
+          >
+            {/* Counts and freshness, both from syncStatus. Absent rather than
+                invented when the read failed. */}
+            {sync && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', lineHeight: 1.3 }}>
+                <span style={{ fontSize: 12, color: 'var(--ink-700)', whiteSpace: 'nowrap' }}>
+                  {sync.stored} call{sync.stored === 1 ? '' : 's'} ·{' '}
+                  <b style={{ fontWeight: 600, color: sync.openDeviations ? 'var(--danger-500)' : 'var(--ink-700)' }}>
+                    {sync.openDeviations}
+                  </b>{' '}
+                  open
+                </span>
+                <span style={{ fontSize: 11, color: 'var(--ink-500)', whiteSpace: 'nowrap' }}>
+                  {!sync.reachable
+                    ? 'Call channel unreachable'
+                    : sync.awaitingIngest
+                      ? `${sync.awaitingIngest} waiting to be pulled in`
+                      : 'Up to date'}
+                  {sync.lastIngestAt ? ` · last call ${ago(sync.lastIngestAt)}` : ''}
+                </span>
+              </div>
+            )}
+
             {refreshNote ? (
               <span style={{ fontSize: 12, color: 'var(--ink-500)', whiteSpace: 'nowrap' }}>
                 {refreshNote}
               </span>
             ) : null}
+
             <button
               className="hue-btn"
               onClick={refresh}
@@ -497,7 +629,7 @@ export function Shell({ me }: { me: CurrentUser }) {
                 alignItems: 'center',
                 gap: 7,
                 height: 36,
-                padding: '0 12px',
+                padding: '0 13px',
                 borderRadius: 6,
                 border: '1px solid var(--border-default)',
                 background: '#fff',
@@ -505,6 +637,7 @@ export function Shell({ me }: { me: CurrentUser }) {
                 fontWeight: 500,
                 color: refreshing ? 'var(--ink-500)' : 'var(--ink-700)',
                 cursor: refreshing ? 'default' : 'pointer',
+                whiteSpace: 'nowrap',
               }}
             >
               {/* The app's own spinner, which stops spinning for anyone who
@@ -513,8 +646,8 @@ export function Shell({ me }: { me: CurrentUser }) {
                 <span className="hue-spinner" />
               ) : (
                 <svg
-                  width="15"
-                  height="15"
+                  width="16"
+                  height="16"
                   viewBox="0 0 24 24"
                   fill="none"
                   stroke="currentColor"
@@ -548,7 +681,9 @@ export function Shell({ me }: { me: CurrentUser }) {
           )}
           {/* Given the signal rather than remounted — a refresh must not throw
               away a search or a filter the user typed. */}
-          {screen === 'convos' && <Conversations onOpen={openCall} refreshSignal={refreshSignal} />}
+          {screen === 'convos' && (
+            <Conversations onOpen={openCall} refreshSignal={refreshSignal} search={query} />
+          )}
           {screen === 'convo' && callId && (
             <ConversationDetail
               id={callId}
@@ -557,7 +692,11 @@ export function Shell({ me }: { me: CurrentUser }) {
             />
           )}
           {screen === 'ints' && (
-            <Interventions onOpen={openDeviation} onBrowseCalls={() => setScreen('convos')} />
+            <Interventions
+              onOpen={openDeviation}
+              onBrowseCalls={() => setScreen('convos')}
+              search={query}
+            />
           )}
           {screen === 'int' && deviationId && (
             <InterventionDetail
@@ -568,7 +707,7 @@ export function Shell({ me }: { me: CurrentUser }) {
             />
           )}
           {screen === 'patterns' && <Patterns onOpenDeviation={openDeviation} />}
-          {screen === 'scope' && <ScopeEvals />}
+          {screen === 'scope' && <ScopeEvals search={query} />}
         </div>
       </div>
     </div>

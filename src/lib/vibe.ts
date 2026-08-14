@@ -492,6 +492,9 @@ export const api = {
       reachable: boolean;
       awaitingIngest: number | null;
       awaitingGrading: number;
+      /** When a call was last pulled in. '' before anything has been. */
+      lastIngestAt: string;
+      openDeviations: number;
       graded: number;
       intervalSeconds: number;
     }>('governance', 'syncStatus'),

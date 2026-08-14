@@ -51,10 +51,13 @@ type Sync = {
 export function Conversations({
   onOpen,
   refreshSignal = 0,
+  search = '',
 }: {
   onOpen: (id: string) => void;
   /** Bumped by the header's Refresh once a pull has finished. */
   refreshSignal?: number;
+  /** The one search box, in the top bar. This screen no longer has its own. */
+  search?: string;
 }) {
   const [sync, setSync] = useState<Sync | null>(null);
   const [items, setItems] = useState<ConversationView[] | null>(null);
@@ -66,7 +69,6 @@ export function Conversations({
   // down, and an analysis running inside it would be cancelled halfway.
   const [toScore, setToScore] = useState<string[]>([]);
   const [scoring, setScoring] = useState<{ at: number; of: number } | null>(null);
-  const [q, setQ] = useState('');
   const [filter, setFilter] = useState<Filter>('All calls');
   const [site, setSite] = useState('All sites');
 
@@ -242,7 +244,7 @@ export function Conversations({
   );
 
   const rows = useMemo(() => {
-    const needle = q.trim().toLowerCase();
+    const needle = search.trim().toLowerCase();
     return (items ?? []).filter((c) => {
       if (filter === 'Flagged' && c.evalStatus !== 'flagged') return false;
       if (filter === 'Passed' && c.evalStatus !== 'passed') return false;
@@ -254,7 +256,7 @@ export function Conversations({
         .filter(Boolean)
         .some((v) => String(v).toLowerCase().includes(needle));
     });
-  }, [items, q, filter, site]);
+  }, [items, search, filter, site]);
 
   if (error) {
     return (
@@ -266,7 +268,6 @@ export function Conversations({
   if (!items) return <BootSkeleton label="Loading calls…" />;
 
   const clearAll = () => {
-    setQ('');
     setFilter('All calls');
     setSite('All sites');
   };
@@ -299,35 +300,6 @@ export function Conversations({
             flexWrap: 'wrap',
           }}
         >
-          <div style={{ position: 'relative' }}>
-            <svg
-              style={{ position: 'absolute', left: 11, top: 11 }}
-              width="15"
-              height="15"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="var(--ink-500)"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-            >
-              <circle cx="11" cy="11" r="8" />
-              <path d="m21 21-4.3-4.3" />
-            </svg>
-            <input className="hue-field"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Search caller, site or SR"
-              style={{
-                width: 240,
-                height: 36,
-                padding: '0 12px 0 34px',
-                border: '1px solid var(--border-default)',
-                borderRadius: 6,
-                fontSize: 13,
-                outline: 'none',
-              }}
-            />
-          </div>
           <select className="hue-field"
             value={site}
             onChange={(e) => setSite(e.target.value)}
