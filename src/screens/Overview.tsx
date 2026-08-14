@@ -4,7 +4,6 @@ import { api, type DeviationWithEvidence, type OverviewMetrics } from '../lib/vi
 import { BootSkeleton } from './BootSkeleton';
 import { ErrorState } from './ErrorState';
 import { FirstRun } from './FirstRun';
-import criteriaSeed from '../../evals/criteria.seed.json';
 import { page } from '../lib/layout';
 
 /**
@@ -405,8 +404,18 @@ export function Overview({
     for (const d of findings) perCriterion.set(d.criterionId, (perCriterion.get(d.criterionId) ?? 0) + 1);
     const recurring = Array.from(perCriterion.values()).filter((n) => n > 1).length;
 
+    // EVERY site the account has, from list-sites — not just the ones that
+    // happen to appear on a conversation. Live calls carry no site at all (the
+    // channel reports none), so deriving the list from conversations showed
+    // only whichever sites a CMMS join had resolved, which was usually one.
+    //
+    // Unioned with sites seen on conversations, so a site that is somehow not
+    // in the account list is still filterable rather than unreachable.
     const siteOptions = Array.from(
-      new Set(convos.map((c) => c.site).filter((s): s is string => !!s)),
+      new Set([
+        ...(metrics.sites ?? []).filter((s): s is string => !!s),
+        ...convos.map((c) => c.site).filter((s): s is string => !!s),
+      ]),
     ).sort();
     const siteLabel =
       siteSel.length === 0 ? 'All sites' : siteSel.length === 1 ? siteSel[0] : `${siteSel.length} sites`;
@@ -443,7 +452,6 @@ export function Overview({
   if (!view) return <BootSkeleton />;
 
   const v = view;
-  const criteriaCount = (criteriaSeed as { criteria: unknown[] }).criteria.length;
 
   function exportExcel() {
     if (!ready) return;
@@ -980,43 +988,6 @@ export function Overview({
         </div>
       </div>
 
-      {/* bottom row */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))',
-          gap: 16,
-          marginTop: 16,
-          background: '#fff',
-          border: '1px solid var(--border-default)',
-          borderRadius: 8,
-          padding: '16px 20px',
-        }}
-      >
-        <div>
-          <div style={kpiLabel}>Scope of work</div>
-          <div style={{ fontSize: 13, marginTop: 4 }}>{criteriaCount} criteria active</div>
-          <span onClick={() => onNavigate?.('scope')} className="hue-link" role="button" tabIndex={0} style={linkish}>
-            Review criteria
-          </span>
-        </div>
-        <div>
-          <div style={kpiLabel}>Recurring problems</div>
-          <div style={{ fontSize: 13, marginTop: 4 }}>
-            {v.recurring} {v.recurring === 1 ? 'pattern' : 'patterns'} tracked
-          </div>
-          <span onClick={() => onNavigate?.('patterns')} className="hue-link" role="button" tabIndex={0} style={linkish}>
-            Fix at source
-          </span>
-        </div>
-        <div>
-          <div style={kpiLabel}>Export</div>
-          <div style={{ fontSize: 13, marginTop: 4 }}>Calls, deviations and corrections</div>
-          <span onClick={exportExcel} className="hue-link" role="button" tabIndex={0} style={linkish}>
-            {exportLabel}
-          </span>
-        </div>
-      </div>
     </div>
   );
 }
