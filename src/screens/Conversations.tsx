@@ -7,6 +7,7 @@ import { avatarColor, clock, duration, evalTone, initials, label, sentimentTone 
 // here. It still drives the poll below, which refreshes the result cell when a
 // call finishes grading.
 import { inFlight } from '../lib/grading';
+import { runCallAnalysis } from '../lib/judges';
 import { channelLabel, channelTone } from '../lib/channel';
 import { page } from '../lib/layout';
 
@@ -60,6 +61,11 @@ export function Conversations({
   const [error, setError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
   const [nudging, setNudging] = useState(false);
+  // Calls this tab won the claim for and still owes a scorecard. Held in state
+  // rather than inside the fetch effect: bumping the nonce tears that effect
+  // down, and an analysis running inside it would be cancelled halfway.
+  const [toScore, setToScore] = useState<string[]>([]);
+  const [scoring, setScoring] = useState<{ at: number; of: number } | null>(null);
   const [q, setQ] = useState('');
   const [filter, setFilter] = useState<Filter>('All calls');
   const [site, setSite] = useState('All sites');
@@ -106,7 +112,13 @@ export function Conversations({
             setNudging(true);
             try {
               const res = await api.nudgeGrading();
-              if (!cancelled && res.graded > 0) setNonce((n) => n + 1);
+              if (!cancelled && res.graded > 0) {
+                // These ids are the claim, in the only form the browser needs:
+                // the server hands back exactly what THIS nudge claimed and
+                // graded. Another tab's nudge gets a different set, or none.
+                setToScore(res.details.map((d) => d.id));
+                setNonce((n) => n + 1);
+              }
             } catch {
               // The job still owns the backlog. A nudge that fails changes
               // nothing and must not be reported as a broken call list.
@@ -125,6 +137,57 @@ export function Conversations({
       cancelled = true;
     };
   }, [nonce, refreshSignal]);
+
+
+  /**
+   * Fill the scorecard for the calls this tab just claimed.
+   *
+   * GRADE-ONCE-PER-CLAIM, not grade-on-every-open. The list is not consulted
+   * for what to score — only the ids the server handed back from our own
+   * nudge, which is the claim it granted us. A call nobody claimed here is
+   * never touched, and a call already graded is never re-graded, because the
+   * nudge only ever claims one whose eval_status is still 'not_evaluated'.
+   *
+   * ONLY THE CALL ANALYST RUNS HERE, deliberately. It writes the scorecard —
+   * quality_score and the grade row — and creates no deviations and no change
+   * to eval_status, so it cannot move the finding count or the compliance
+   * score while somebody browses. The semantic judges DO write deviations, and
+   * running those automatically is exactly the drift that was removed when
+   * grading stopped happening on open. They stay behind Run evals.
+   *
+   * Sequential on purpose: these are model calls, and firing a page-load's
+   * worth of them at once helps nobody.
+   *
+   * Cancelled only on unmount. A nonce bump must not kill work in flight.
+   */
+  useEffect(() => {
+    if (!toScore.length) return;
+    let unmounted = false;
+    const queue = toScore;
+
+    (async () => {
+      for (let i = 0; i < queue.length; i++) {
+        if (unmounted) return;
+        setScoring({ at: i + 1, of: queue.length });
+        try {
+          await runCallAnalysis(queue[i]);
+        } catch {
+          // A call that could not be analysed keeps its checks and reports
+          // "checks run · not analysed". It is not retried — that would be
+          // re-grading a graded call — and Run evals remains the way back.
+        }
+      }
+      if (unmounted) return;
+      setScoring(null);
+      setToScore([]);
+      // Now the scores exist, so the rows can show them.
+      setNonce((n) => n + 1);
+    })();
+
+    return () => {
+      unmounted = true;
+    };
+  }, [toScore]);
 
   // Is anything still moving? Drives the poll below, and stops it dead once
   // every call has settled — a quiet app should make no requests at all.
@@ -327,7 +390,10 @@ export function Conversations({
         </span>
       </div>
 
-      {sync && (sync.awaitingIngest || sync.awaitingGrading || !sync.reachable) ? (
+      {/* `scoring` is in the condition because the scorecards are still being
+          filled after awaitingGrading has already dropped to zero — without it
+          the banner vanishes mid-work and the app looks idle while it is not. */}
+      {sync && (sync.awaitingIngest || sync.awaitingGrading || scoring || !sync.reachable) ? (
         <div
           style={{
             display: 'flex',
@@ -368,11 +434,19 @@ export function Conversations({
                   {nudging ? 'awaiting grading — grading now…' : 'awaiting grading.'}
                 </span>
               ) : null}
+              {/* The scorecard half, which outlives the grading half: the
+                  checks finish in seconds and the analyst takes tens of them. */}
+              {scoring ? (
+                <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                  <span className="hue-spinner" aria-hidden="true" />
+                  Scoring {scoring.at} of {scoring.of} — this finishes on its own
+                </span>
+              ) : null}
               {/* The interval, not a countdown — the app cannot see when the job
                   last fired, and inventing a number would be worse than none.
                   While a nudge is in flight this would be actively misleading:
                   the wait is seconds, not the interval, so it stands down. */}
-              {!nudging ? (
+              {!nudging && !scoring ? (
                 <span style={{ marginLeft: 'auto', color: 'var(--ink-600)' }}>
                   Syncs automatically every {Math.round(sync.intervalSeconds / 60)} minutes
                 </span>
