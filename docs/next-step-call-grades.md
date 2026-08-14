@@ -6,8 +6,8 @@
 `ConversationDetail` seeds its analysis state from it, so the justification,
 sentiment reason and overall assessment now survive a reload.
 
-**Step 3 (the reload nudge) is still held** — `claimed_at` / `claimed_by` are
-written as `''` on insert and left untouched on re-grade, waiting for it.
+**Step 3 (the reload nudge) is also BUILT**, deployed as v38 — see
+`docs/reload-nudge.md` for the claim, the reap, and what was verified.
 
 The rest of this document is the spec as approved and built against; it is kept
 because the rules in it outlive the pass that implemented them.
@@ -171,9 +171,7 @@ without pressing Run evals.
 
 ## Held for later
 
-- **Step 3 — the reload nudge.** `claimed_at` / `claimed_by` exist for it: claim
-  a row before grading so two users cannot grade the same call, and reap a claim
-  left behind by a dead run using its age. Do not build until asked.
+- ~~**Step 3 — the reload nudge.**~~ Built — `docs/reload-nudge.md`.
 - **Ingest duplicate window.** `upsertLiveCall` is select-then-insert with no
   unique index, so two simultaneous ingests of the same new call could both
   write. Unreachable today (one scheduled ingester), and it is why reload-ingest

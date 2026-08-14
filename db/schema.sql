@@ -257,9 +257,15 @@ CREATE INDEX IF NOT EXISTS notifications_state_idx ON notifications (state);
 --     embedded delimiters). criteria_unavailable keeps "the judge never
 --     answered" distinct from "the criterion passed" — the same rule that
 --     holds everywhere else in this app.
---   * claimed_at / claimed_by exist for the multi-user nudge: a grade claims
---     a row before starting, so two users cannot grade the same call, and a
---     claim left behind by a dead run can be reaped by age.
+--   * claimed_at / claimed_by carry the multi-user claim: a fire claims a row
+--     before grading it, so two users cannot grade the same call, and a claim
+--     left behind by a dead run is reaped by age (10 min). Claimed by one
+--     atomic UPDATE ... FOR UPDATE SKIP LOCKED ... RETURNING, shared by the
+--     scheduled job and the reload nudge. See docs/reload-nudge.md.
+--   * The claim columns and the grade columns have SEPARATE writers and must
+--     stay that way: a claim never writes a grade column, a grade never clears
+--     a claim. A row whose graded_at is empty is a CLAIM, not a grade — no
+--     reader may treat it as one.
 --
 -- There is no DROP and no ALTER on this path. A further column means a further
 -- table, which is why schema_version is here.

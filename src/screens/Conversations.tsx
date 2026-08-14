@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, type ConversationView } from '../lib/vibe';
 import { BootSkeleton } from './BootSkeleton';
 import { LoadError } from '../components/Chrome';
@@ -47,9 +47,15 @@ export function Conversations({ onOpen }: { onOpen: (id: string) => void }) {
   const [items, setItems] = useState<ConversationView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
+  const [nudging, setNudging] = useState(false);
   const [q, setQ] = useState('');
   const [filter, setFilter] = useState<Filter>('All calls');
   const [site, setSite] = useState('All sites');
+
+  // One nudge per mount. Without this the refresh a nudge triggers would nudge
+  // again on the way back, and a page that grades on every render is exactly
+  // the runaway this whole claim mechanism is meant to prevent.
+  const nudged = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -60,11 +66,31 @@ export function Conversations({ onOpen }: { onOpen: (id: string) => void }) {
         const rows = await api.listConversations(200);
         if (!cancelled) setItems(rows);
         // Read-only: reports how far behind the channel we are and how much is
-        // waiting on the grading job. Never ingests or grades from here — two
-        // users reloading must not race to write the same call.
+        // waiting on the grading job. Ingest never happens from here — that
+        // path has no claim and two reloads would race to write the same call.
         try {
           const st = await api.syncStatus();
-          if (!cancelled) setSync(st);
+          if (cancelled) return;
+          setSync(st);
+
+          // Grading, unlike ingest, is claimed per call on the server — so it
+          // IS safe to ask for from a page load. Rather than leaving someone
+          // looking at a backlog for up to fifteen minutes, take a bite out of
+          // it now. Whoever else has this page open at the same moment gets a
+          // different call, or nothing; never this one.
+          if (st.awaitingGrading > 0 && !nudged.current) {
+            nudged.current = true;
+            setNudging(true);
+            try {
+              const res = await api.nudgeGrading();
+              if (!cancelled && res.graded > 0) setNonce((n) => n + 1);
+            } catch {
+              // The job still owns the backlog. A nudge that fails changes
+              // nothing and must not be reported as a broken call list.
+            } finally {
+              if (!cancelled) setNudging(false);
+            }
+          }
         } catch {
           // A sync read failing must not take the call list down with it.
         }
@@ -271,14 +297,19 @@ export function Conversations({ onOpen }: { onOpen: (id: string) => void }) {
               ) : null}
               {sync.awaitingGrading ? (
                 <span>
-                  <b style={{ fontWeight: 600 }}>{sync.awaitingGrading}</b> awaiting grading.
+                  <b style={{ fontWeight: 600 }}>{sync.awaitingGrading}</b>{' '}
+                  {nudging ? 'awaiting grading — grading now…' : 'awaiting grading.'}
                 </span>
               ) : null}
               {/* The interval, not a countdown — the app cannot see when the job
-                  last fired, and inventing a number would be worse than none. */}
-              <span style={{ marginLeft: 'auto', color: 'var(--ink-600)' }}>
-                Syncs automatically every {Math.round(sync.intervalSeconds / 60)} minutes
-              </span>
+                  last fired, and inventing a number would be worse than none.
+                  While a nudge is in flight this would be actively misleading:
+                  the wait is seconds, not the interval, so it stands down. */}
+              {!nudging ? (
+                <span style={{ marginLeft: 'auto', color: 'var(--ink-600)' }}>
+                  Syncs automatically every {Math.round(sync.intervalSeconds / 60)} minutes
+                </span>
+              ) : null}
             </>
           )}
         </div>

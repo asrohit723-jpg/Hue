@@ -449,6 +449,24 @@ export const api = {
       intervalSeconds: number;
     }>('governance', 'syncStatus'),
 
+  /**
+   * Ask the server to grade a call or two NOW instead of waiting for the job.
+   *
+   * Safe to call from every open tab: the server claims each call before
+   * grading it, so two people reloading at the same moment take different
+   * calls and never the same one. Grading itself stays server-side — this
+   * only makes it happen sooner.
+   */
+  nudgeGrading: () =>
+    call<{
+      graded: number;
+      details: Array<{ id: string; findings: number; join: string | null }>;
+      failed: Array<{ id: string; error: string }>;
+      stoppedForBudget: boolean;
+      stillUngraded: number;
+      elapsedSeconds: number;
+    }>('governance', 'nudgeGrading'),
+
   /** Transcript + CMMS record + active criteria, for the call analyst. */
   callAnalysisContext: (conversationId: string) =>
     call<{

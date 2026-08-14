@@ -893,6 +893,195 @@ server.addHandler({
 });
 
 // ---------------------------------------------------------------------------
+// Claiming a call for grading
+//
+// Two things can decide to grade the same call: the scheduled job, and a browser
+// that just loaded and does not want to wait 15 minutes for it. They must not
+// both grade one call, and two browsers reloading at the same instant must not
+// either. Everything below exists for that, and BOTH paths go through it —
+// forking the claim would defeat the whole point of having one.
+//
+// The claim lives on the grade row. `call_grades.claimed_at/claimed_by` were put
+// there for exactly this, and reusing that row means a call has one record, not
+// a grade plus a separate lease that can disagree with it.
+//
+// TWO WRITERS OF call_grades NOW EXIST, OVER DISJOINT COLUMNS:
+//
+//   writeCallGrade  owns every grade column, and conversations.quality_score.
+//                   It never touches claimed_at/claimed_by.
+//   the claim path  owns claimed_at/claimed_by, and nothing else.
+//
+// That partition is what keeps the single-writer rule from step 1 true. A claim
+// must never write a grade column, and a grade must never clear a claim.
+// ---------------------------------------------------------------------------
+
+/**
+ * How long a claim may sit unfinished before another fire may take the call.
+ *
+ * Deterministic grading is 2-5s, so ten minutes is not a timeout — it is the
+ * mark of a fire that DIED. A claim is only reaped this way; nothing releases
+ * one on failure, deliberately. A call whose grade throws keeps its claim and
+ * becomes retryable in ten minutes, which is a backoff. Releasing it
+ * immediately would let a permanently failing call be retried by every reload.
+ */
+const CLAIM_TTL_MS = 10 * 60 * 1000;
+
+/** An ISO stamp `ms` in the past, in the same shape every other stamp uses. */
+function isoAgo(ms: number) {
+  return new Date(Date.now() - ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+/**
+ * Give every ungradeable-yet call a grade row, so there is something to claim.
+ *
+ * A call that has never been graded has no `call_grades` row, and an atomic
+ * claim needs a row to update. This creates the empty shell — claim columns
+ * blank, grade columns blank — which `writeCallGrade` later fills in.
+ *
+ * THE HONEST LIMIT: the app's role cannot create a unique index (it cannot even
+ * CREATE TABLE — see the header), so this insert cannot be made exclusive. Two
+ * fires racing to backfill the SAME never-graded call could both insert a
+ * placeholder, and each could then claim one of the twins. The cost of that is
+ * a call graded twice, not a call graded wrongly: `deviations` carries a real
+ * UNIQUE (conversation_id, criterion_id), and `writeCallGrade` upserts on a
+ * deterministic id, so the second pass converges on the same rows the first
+ * wrote. Wasted work, never divergent data.
+ *
+ * Run once per fire, not once per call.
+ */
+function ensureGradeRows(db: any): number {
+  const { rowCount, rows } = db.query(
+    `insert into call_grades
+       (id, conversation_id, claimed_at, claimed_by, graded_at, graded_by, applicable,
+        response_quality, quality_justification, sentiment, sentiment_reason,
+        sentiment_channel, sentiment_agrees, overall_assessment, criteria_satisfied,
+        criteria_breached, criteria_graded, criteria_unavailable, agent_version, schema_version)
+     select 'CG-' || c.id, c.id, '', '', '', '', '', null, '', '', '', '', '', '', '', '', '', '', '', 1
+       from conversations c
+      where c.id <> '__seed__'
+        and c.eval_status = 'not_evaluated'
+        and not exists (select 1 from call_grades g where g.id = 'CG-' || c.id)
+     returning id`,
+  );
+  return Number(rowCount ?? (rows?.length || 0));
+}
+
+/**
+ * Claim ONE call for grading, atomically, or return null when there is nothing
+ * to take.
+ *
+ * This is the whole concurrency story, and it is one statement on purpose:
+ *
+ *   - Postgres takes a row lock per candidate. Two claimers cannot both update
+ *     the same row; the loser re-evaluates the WHERE clause against the winner's
+ *     committed value, sees a fresh claim, and matches nothing.
+ *   - SKIP LOCKED is what turns "the loser gets nothing" into "the loser gets a
+ *     DIFFERENT call". Without it the second claimer blocks on the row the first
+ *     is holding and then finds it taken; with it, it steps past to the next
+ *     candidate. That is the behaviour two people reloading at once need.
+ *   - RETURNING is the proof of the claim. Nothing acts on a call it did not
+ *     get back from here.
+ *
+ * Claimed one at a time, immediately before grading, rather than a batch up
+ * front: a fire that claimed ten and died after three would strand seven for the
+ * full TTL, which is the stuck state this is supposed to prevent.
+ */
+function claimNextForGrading(db: any, by: string): string | null {
+  const now = nowIso();
+  const cutoff = isoAgo(CLAIM_TTL_MS);
+
+  const { rows } = db.query(
+    `update call_grades set claimed_at = $1, claimed_by = $2
+      where id in (
+        select cg.id
+          from call_grades cg
+          join conversations c on c.id = cg.conversation_id
+         where cg.id <> '__seed__'
+           and c.eval_status = 'not_evaluated'
+           and (
+                 cg.claimed_at is null
+              or cg.claimed_at = ''                                   -- never claimed
+              or cg.claimed_at < $3                                   -- a dead fire's claim, reaped
+              or (cg.graded_at <> '' and cg.graded_at >= cg.claimed_at) -- last claim finished
+           )
+         order by c.started_at desc
+         limit 1
+         for update skip locked
+      )
+     returning conversation_id`,
+    [now, by, cutoff],
+  );
+
+  const id = rows[0]?.conversation_id;
+  return id ? String(id) : null;
+}
+
+/**
+ * Claim and grade until the limit or the budget runs out.
+ *
+ * The single path to scheduled grading. The job and the reload nudge differ
+ * only in how much they ask for — if they differed in how they claim, a
+ * scheduled fire and a nudge could grade the same call, which is the one thing
+ * this is here to make impossible.
+ *
+ * Deterministic only. No agent call happens here or can: a Studio Function
+ * aborts a fetch at ~10s and every agent Hue uses runs longer. The nudge makes
+ * the SERVER grade sooner; it does not move grading into the browser.
+ */
+async function gradeClaimed(by: string, limit: number, budgetMs: number) {
+  const db = connect();
+  const startedAt = Date.now();
+
+  ensureGradeRows(db);
+
+  const graded: Array<{ id: string; findings: number; join: string | null }> = [];
+  const failed: Array<{ id: string; error: string }> = [];
+  let stoppedForBudget = false;
+
+  while (graded.length + failed.length < limit) {
+    if (Date.now() - startedAt > budgetMs) {
+      stoppedForBudget = true;
+      break;
+    }
+    const convoId = claimNextForGrading(db, by);
+    if (!convoId) break;
+
+    try {
+      const res = await gradeConversation(convoId);
+      graded.push({
+        id: convoId,
+        findings: res.deviationsFound ?? 0,
+        join: res.join?.cmmsSrId ?? null,
+      });
+    } catch (err) {
+      // One bad call must not abort the fire — the rest still get graded. The
+      // claim stays on it, so it is retryable once the TTL reaps it rather than
+      // immediately re-attempted by whoever reloads next.
+      failed.push({ id: convoId, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  const remaining = Number(
+    db.query(
+      "select count(*) as n from conversations where id <> '__seed__' and eval_status = 'not_evaluated'",
+    ).rows[0]?.n ?? 0,
+  );
+
+  return {
+    graded,
+    failed,
+    stoppedForBudget,
+    stillUngraded: remaining,
+    elapsedSeconds: Math.round((Date.now() - startedAt) / 1000),
+  };
+}
+
+/** Who holds a claim. Provenance only — exclusivity comes from the row lock. */
+function claimant(kind: string) {
+  return `${kind}-${Date.now().toString(36)}`;
+}
+
+// ---------------------------------------------------------------------------
 // Screens
 // ---------------------------------------------------------------------------
 
@@ -905,65 +1094,57 @@ server.addHandler({
     budgetSeconds: { description: 'Stop starting new calls after this many seconds', type: 'number' },
   },
   execute: async (args) => {
-    const db = connect();
-
     // A fire must finish inside the job's wall clock. Deterministic grading is
     // 2-5s per call (a CMMS join plus code), so the cap is generous — but it is
     // a cap, not a hope: the loop stops starting work once the budget is spent
     // and reports what it left, rather than being killed mid-write.
     const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 50);
     const budgetMs = Math.min(Math.max(Number(args.budgetSeconds) || 600, 30), 840) * 1000;
-    const startedAt = Date.now();
 
-    const { rows } = db.query(
-      `select id from conversations
-        where id <> '__seed__' and eval_status = 'not_evaluated'
-        order by started_at desc
-        limit $1`,
-      [limit],
-    );
-
-    const graded: Array<{ id: string; findings: number; join: string | null }> = [];
-    const failed: Array<{ id: string; error: string }> = [];
-    let stoppedForBudget = false;
-
-    for (const r of rows) {
-      if (Date.now() - startedAt > budgetMs) {
-        stoppedForBudget = true;
-        break;
-      }
-      try {
-        const res = await gradeConversation(String(r.id));
-        graded.push({
-          id: String(r.id),
-          findings: res.deviationsFound ?? 0,
-          join: res.join?.cmmsSrId ?? null,
-        });
-      } catch (err) {
-        // One bad call must not abort the fire — the rest still get graded, and
-        // an ungraded call simply stays ungraded for the next one.
-        failed.push({ id: String(r.id), error: err instanceof Error ? err.message : String(err) });
-      }
-    }
-
-    const remaining = Number(
-      db.query(
-        "select count(*) as n from conversations where id <> '__seed__' and eval_status = 'not_evaluated'",
-      ).rows[0]?.n ?? 0,
-    );
+    // Claims each call before grading it, through the same core the reload
+    // nudge uses — so a scheduled fire and a browser cannot pick the same call.
+    const run = await gradeClaimed(claimant('job'), limit, budgetMs);
 
     return {
-      candidates: rows.length,
-      graded: graded.length,
-      details: graded,
-      failed,
-      stoppedForBudget,
-      stillUngraded: remaining,
-      elapsedSeconds: Math.round((Date.now() - startedAt) / 1000),
+      graded: run.graded.length,
+      details: run.graded,
+      failed: run.failed,
+      stoppedForBudget: run.stoppedForBudget,
+      stillUngraded: run.stillUngraded,
+      elapsedSeconds: run.elapsedSeconds,
       note:
         'Deterministic checks only. The semantic judges and the call analyst cannot run here — ' +
         'a Studio Function aborts a fetch at ~10s and every agent call takes longer. Those stay on ' +
         'the browser-side "Run evals" action.',
+    };
+  },
+});
+
+server.addHandler({
+  name: 'nudgeGrading',
+  description:
+    'Grade a call or two NOW rather than waiting for the scheduled job. Claims each call first, through the same claim as the job, so two users reloading at once take different calls and never the same one. Server-side and deterministic — the nudge makes grading happen sooner, it does not move it into the browser.',
+  parameters: {
+    limit: { description: 'Max calls to grade this nudge (default 2)', type: 'number' },
+    budgetSeconds: { description: 'Stop starting new calls after this many seconds (default 20)', type: 'number' },
+  },
+  execute: async (args) => {
+    // Deliberately small. This runs while someone waits on a page load, so it
+    // takes a bite out of the backlog rather than trying to clear it — the job
+    // owns the backlog. A big limit here would leave the browser hanging on a
+    // request that has no business being long.
+    const limit = Math.min(Math.max(Number(args.limit) || 2, 1), 5);
+    const budgetMs = Math.min(Math.max(Number(args.budgetSeconds) || 20, 5), 60) * 1000;
+
+    const run = await gradeClaimed(claimant('nudge'), limit, budgetMs);
+
+    return {
+      graded: run.graded.length,
+      details: run.graded,
+      failed: run.failed,
+      stoppedForBudget: run.stoppedForBudget,
+      stillUngraded: run.stillUngraded,
+      elapsedSeconds: run.elapsedSeconds,
     };
   },
 });
@@ -1226,8 +1407,17 @@ server.addHandler({
     // The stored grade. Before this existed the justification, sentiment reason
     // and overall assessment lived only in React state and vanished on reload —
     // the score survived, its reasoning did not.
+    //
+    // `graded_at <> ''` is load-bearing: since the claim path seeds an empty row
+    // for every call awaiting grading, a row's EXISTENCE no longer means the
+    // call was graded. Without this a claimed-but-unanalysed call comes back
+    // with applicable=false, which the scorecard renders as "not applicable" —
+    // the UI would say the call could not be judged when nothing has judged it.
+    // A claim is not a grade.
     const gradeRow = db.query(
-      `select * from call_grades where conversation_id = $1 and id <> '__seed__' limit 1`,
+      `select * from call_grades
+        where conversation_id = $1 and id <> '__seed__' and graded_at <> ''
+        limit 1`,
       [id],
     ).rows[0];
     const grade = gradeRow ? readGrade(gradeRow) : null;
