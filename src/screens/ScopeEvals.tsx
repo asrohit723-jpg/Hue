@@ -136,6 +136,7 @@ export function ScopeEvals() {
   // The real scope of work, and the evals written from it. Pasted for now; the
   // fetch from agent 6208 is one function away — see fetchSowFromAgent.
   const [sow, setSow] = useState<Awaited<ReturnType<typeof api.currentSow>> | null>(null);
+  const [versions, setVersions] = useState<Awaited<ReturnType<typeof api.sowVersions>>['items']>([]);
   const [sowBusy, setSowBusy] = useState<string | null>(null);
   const [sowNote, setSowNote] = useState<string | null>(null);
   const [sowError, setSowError] = useState<string | null>(null);
@@ -148,10 +149,11 @@ export function ScopeEvals() {
     let cancelled = false;
     (async () => {
       try {
-        const [devs, convos, current] = await Promise.all([
+        const [devs, convos, current, vers] = await Promise.all([
           api.listDeviations(''),
           api.listConversations(200),
           api.currentSow().catch(() => null),
+          api.sowVersions().catch(() => ({ items: [] })),
         ]);
         if (cancelled) return;
         setDeviations(devs);
@@ -160,6 +162,7 @@ export function ScopeEvals() {
           setSow(current);
           setDraft(current.sow?.body ?? '');
         }
+        setVersions(vers.items);
       } catch (err) {
         // The criteria themselves are bundled configuration and still render,
         // so this is a partial failure, not a dead screen: the pass-rate column
@@ -225,6 +228,7 @@ export function ScopeEvals() {
       const current = await api.currentSow();
       setSow(current);
       setDraft(current.sow?.body ?? draft);
+      setVersions((await api.sowVersions().catch(() => ({ items: [] }))).items);
     } catch (err) {
       setSowError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -322,7 +326,6 @@ export function ScopeEvals() {
 
   const wired = criteria.filter((c) => WIRED_CRITERIA.has(c.id)).length;
   const coverage = criteria.length ? Math.round((wired / criteria.length) * 100) : 0;
-  const det = criteria.filter((c) => c.layer === 'deterministic').length;
 
   if (deviations === null) return <BootSkeleton label="Loading evals…" />;
 
@@ -674,50 +677,63 @@ export function ScopeEvals() {
             </div>
             <div style={{ borderLeft: '1px solid var(--ink-100)', paddingLeft: 20 }}>
               <div style={microLabel}>Version history</div>
+              {/* Read from sow_documents. This panel used to be hardcoded — a
+                  fake "seed" entry marked Current and "No earlier versions" —
+                  written when there was no table to keep versions in. There is,
+                  and it had five of them by the time anyone looked. */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 10 }}>
-                <div
-                  style={{
-                    padding: '9px 10px',
-                    borderRadius: 6,
-                    background: 'var(--blue-025)',
-                    borderLeft: '2px solid var(--blue-500)',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span
-                      style={{
-                        fontFamily: 'var(--font-mono)',
-                        fontSize: 12,
-                        color: 'var(--blue-600)',
-                        fontWeight: 600,
-                      }}
-                    >
-                      seed
-                    </span>
-                    <span
-                      style={{
-                        marginLeft: 'auto',
-                        fontSize: 10,
-                        fontWeight: 600,
-                        letterSpacing: '.03em',
-                        textTransform: 'uppercase',
-                        color: 'var(--success-700)',
-                      }}
-                    >
-                      Current
-                    </span>
+                {versions.map((v) => (
+                  <div
+                    key={v.id}
+                    style={{
+                      padding: '9px 10px',
+                      borderRadius: 6,
+                      background: v.isCurrent ? 'var(--blue-025)' : 'transparent',
+                      borderLeft: `2px solid ${v.isCurrent ? 'var(--blue-500)' : 'var(--ink-100)'}`,
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span
+                        style={{
+                          fontFamily: 'var(--font-mono)',
+                          fontSize: 12,
+                          color: v.isCurrent ? 'var(--blue-600)' : 'var(--ink-600)',
+                          fontWeight: 600,
+                        }}
+                        title={v.fingerprint}
+                      >
+                        {v.fingerprint.slice(0, 10)}
+                      </span>
+                      {v.isCurrent && (
+                        <span
+                          style={{
+                            marginLeft: 'auto', fontSize: 10, fontWeight: 600,
+                            letterSpacing: '.03em', textTransform: 'uppercase',
+                            color: 'var(--success-700)',
+                          }}
+                        >
+                          Current
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ fontSize: 12, lineHeight: '17px', color: 'var(--ink-700)', marginTop: 3 }}>
+                      {v.chars} characters · {v.evalCount} eval{v.evalCount === 1 ? '' : 's'}
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--ink-500)', marginTop: 3 }}>
+                      {/* Where a version came from, because "approved fix" and
+                          "pasted" are different events and the difference is
+                          the whole audit trail. */}
+                      {v.sourceRef.startsWith('correction:')
+                        ? `From an approved fix · ${v.sourceRef.slice('correction:'.length)}`
+                        : `Pasted by ${v.savedBy || 'someone'}`}
+                    </div>
                   </div>
-                  <div style={{ fontSize: 12, lineHeight: '17px', color: 'var(--ink-700)', marginTop: 3 }}>
-                    {criteria.length} criteria seeded — {det} deterministic, {criteria.length - det}{' '}
-                    semantic.
+                ))}
+                {versions.length === 0 && (
+                  <div style={{ fontSize: 11, color: 'var(--ink-500)', padding: '9px 10px', lineHeight: '16px' }}>
+                    No scope of work stored yet. The first paste becomes version one.
                   </div>
-                  <div style={{ fontSize: 11, color: 'var(--ink-500)', marginTop: 3 }}>
-                    evals/criteria.seed.json · ships with the app
-                  </div>
-                </div>
-                <div style={{ fontSize: 11, color: 'var(--ink-500)', padding: '9px 10px', lineHeight: '16px' }}>
-                  No earlier versions. History begins when a document can be saved.
-                </div>
+                )}
               </div>
             </div>
           </div>

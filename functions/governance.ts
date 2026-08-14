@@ -2069,6 +2069,50 @@ server.addHandler({
 });
 
 server.addHandler({
+  name: 'sowVersions',
+  description:
+    'Every stored version of the scope of work, newest first, with how many evals each produced. The table has kept these all along; nothing read them, so the screen showed a hardcoded "no earlier versions".',
+  parameters: {},
+  execute: async () => {
+    const db = connect();
+    const rows = db.query(
+      `select * from sow_documents where id <> '__seed__'
+        order by case when is_current = 'true' then 0 else 1 end, fetched_at desc`,
+    ).rows;
+
+    return {
+      items: rows.map((r: any) => {
+        const fp = String(r.fingerprint ?? '');
+        const evalCount = Number(
+          db.query(
+            `select count(*) as n from generated_evals
+              where id <> '__seed__' and sow_fingerprint = $1 and active = 'true'
+                and generated_by <> 'manual'`,
+            [fp],
+          ).rows[0]?.n ?? 0,
+        );
+        return {
+          id: String(r.id ?? ''),
+          fingerprint: fp,
+          title: String(r.title ?? ''),
+          isCurrent: isTrue(r.is_current),
+          source: String(r.source ?? ''),
+          sourceRef: String(r.source_ref ?? ''),
+          savedBy: String(r.saved_by ?? ''),
+          fetchedAt: String(r.fetched_at ?? ''),
+          supersededAt: String(r.superseded_at ?? ''),
+          chars: String(r.body ?? '').length,
+          // Only what the writer produced for THAT text. Hand-written evals are
+          // not tied to a version, so counting them here would attribute one
+          // person's criterion to every version of the document.
+          evalCount,
+        };
+      }),
+    };
+  },
+});
+
+server.addHandler({
   name: 'saveGeneratedEvals',
   description:
     'Persist the criteria the eval-writer produced for one SOW version. Validates every row before writing — the browser proposes criteria, this decides what may grade a call.',

@@ -582,6 +582,16 @@ export const api = {
       sizeBytes?: number;
     }>('governance', 'callRecording', { conversationId }),
 
+  /** Every stored version of the scope of work, newest first. */
+  sowVersions: () =>
+    call<{
+      items: Array<{
+        id: string; fingerprint: string; title: string; isCurrent: boolean;
+        source: string; sourceRef: string; savedBy: string;
+        fetchedAt: string; supersededAt: string; chars: number; evalCount: number;
+      }>;
+    }>('governance', 'sowVersions'),
+
   /** Store the scope of work, and learn whether it CHANGED. */
   saveSow: (a: { body: string; title: string; savedBy: string }) =>
     call<{
