@@ -2483,6 +2483,116 @@ async function deviationContext(db: any, deviationId: string, memo?: (id: string
 
 
 
+
+/**
+ * Create or update — decided by the JOIN, never by the model.
+ *
+ * The proposer suggests a verb, but it is reading a transcript, not the CMMS.
+ * If it says "create" while a record already exists, honouring that produces a
+ * SECOND service request for one fault — the duplicate this app exists to
+ * catch, manufactured by the tool meant to fix it.
+ *
+ * So ground truth decides: a call with no resolved record needs one made, and
+ * a call with one needs it corrected. Both the button and the write read this,
+ * so they cannot disagree about what is about to happen.
+ */
+function cmmsPlanFor(convo: any, action: any): { verb: string; recordId: string | null; reason: string } {
+  const recordId = String(convo?.cmms_sr_id ?? '').trim() || null;
+  const proposed = String(action?.verb ?? 'none');
+
+  // The proposer named no CMMS work: this is a prompt, scope or human fix.
+  if (proposed !== 'create' && proposed !== 'update') {
+    return { verb: 'none', recordId, reason: 'This correction does not write to the CMMS.' };
+  }
+  if (!recordId) {
+    return {
+      verb: 'create',
+      recordId: null,
+      reason: 'The join found no service request for this call, so the record has to be made.',
+    };
+  }
+  return {
+    verb: 'update',
+    recordId,
+    reason: `This call resolved to service request ${recordId}, so the fix corrects that record.`,
+  };
+}
+
+server.addHandler({
+  name: 'applySowFix',
+  description:
+    "Approve a correction's agent-side fix by writing it into the scope of work as a new version. Idempotent by containment: a clause the SOW already carries is not appended twice. Returns the new fingerprint so the browser can regenerate the evals.",
+  parameters: { correctionId: { description: 'Correction id', type: 'string' } },
+  execute: async (args) => {
+    const db = connect();
+    const corrId = String(args.correctionId ?? '').trim();
+    const corr = db.query('select * from corrections where id = $1 limit 1', [corrId]).rows[0];
+    if (!corr) throw new Error(`No correction ${corrId}`);
+
+    const addition = String(corr.after_text ?? '').trim();
+    if (!addition) {
+      throw new Error('This correction has no proposed text to write into the scope of work.');
+    }
+
+    const sow = currentSowRow(db);
+    if (!sow) {
+      // Refusing beats inventing: writing a scope of work out of one clause
+      // would make a fragment look like the whole contract, and every eval
+      // after it would be generated from that fragment.
+      throw new Error(
+        'No scope of work is stored yet. Paste it on Scope & Evals first — a fix has to amend something.',
+      );
+    }
+
+    const body = String(sow.body ?? '');
+    // Idempotency, and the reason it needs no write key: the SOW is addressed
+    // by its own content. A clause already present means the fix is already
+    // applied, so approving twice is a no-op rather than a second paragraph.
+    if (body.includes(addition)) {
+      return {
+        correctionId: corrId,
+        alreadyApplied: true,
+        fingerprint: String(sow.fingerprint ?? ''),
+        changed: false,
+        note: 'The scope of work already carries this fix.',
+      };
+    }
+
+    const stamped =
+      `${body.trimEnd()}\n\n` +
+      `[Hue ${nowIso()}] Amended from deviation ${corr.deviation_id} — ${String(corr.title ?? 'correction')}.\n` +
+      addition;
+
+    const res = writeSowDocument(db, {
+      title: String(sow.title ?? 'Scope of work'),
+      body: stamped,
+      source: String(sow.source ?? 'manual'),
+      sourceRef: `correction:${corrId}`,
+      savedBy: 'approved fix',
+    });
+
+    // The correction records that its agent-side half landed. The CMMS half
+    // keeps its own applied_write_key and its own state, because the two are
+    // separate commits against different systems.
+    db.query(
+      `update corrections set state = case when state = 'proposed' then 'approved' else state end,
+         recommended_action = $2 where id = $1`,
+      [corrId, `Written into the scope of work as ${res.id}`],
+    );
+
+    return {
+      correctionId: corrId,
+      alreadyApplied: false,
+      fingerprint: res.fingerprint,
+      sowId: res.id,
+      changed: res.changed,
+      // The browser regenerates from here: the eval writer is an agent and
+      // cannot run in a function.
+      needsEvalRegeneration: res.changed,
+    };
+  },
+});
+
 server.addHandler({
   name: 'approveCorrection',
   description:
@@ -2522,7 +2632,12 @@ server.addHandler({
     } catch {
       action = {};
     }
-    const verb = String(action.verb ?? 'none');
+    // The JOIN decides, not the proposal. This is the guard that stops a
+    // "create" verdict against a call that already has a record from raising a
+    // duplicate — and stops an "update" against a call that has none from
+    // silently writing nowhere.
+    const plan = cmmsPlanFor(convo, action);
+    const verb = plan.verb;
 
     let appliedRecordId: string | null = null;
 
@@ -3368,7 +3483,12 @@ server.addHandler({
       'select * from corrections where deviation_id = $1 order by proposed_at desc limit 1',
       [devId],
     ).rows[0];
-    if (!row) return { correction: null };
+    if (!row) return { correction: null, cmmsPlan: null };
+
+    const dev = db.query('select * from deviations where id = $1 limit 1', [devId]).rows[0];
+    const convo = dev
+      ? db.query('select * from conversations where id = $1 limit 1', [dev.conversation_id]).rows[0]
+      : null;
 
     let cmmsAction: any = {};
     try {
@@ -3395,6 +3515,9 @@ server.addHandler({
         appliedAt: row.applied_at,
         appliedRecordId: row.applied_record_id,
       },
+      // What the write would actually do, decided here so the button cannot
+      // promise something different from what the server will perform.
+      cmmsPlan: cmmsPlanFor(convo, cmmsAction),
     };
   },
 });

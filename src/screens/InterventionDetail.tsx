@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, vibe, type ConversationView, type DeviationWithEvidence } from '../lib/vibe';
 import { BootSkeleton } from './BootSkeleton';
 import { LoadError } from '../components/Chrome';
@@ -7,6 +7,7 @@ import criteriaSeed from '../../evals/criteria.seed.json';
 import { page } from '../lib/layout';
 import {
   classifyRootCause,
+  generateEvals,
   proposeCorrection,
   JudgeTimeout,
   type JudgeContext,
@@ -109,6 +110,15 @@ export function InterventionDetail({
   const [error, setError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
   const [act, setAct] = useState<ActionState>(IDLE);
+  // What the CMMS write would actually do, decided by the server from the join
+  // rather than by the proposer — so the button cannot promise a create while
+  // the server performs an update.
+  const [cmmsPlan, setCmmsPlan] = useState<{ verb: string; recordId: string | null; reason: string } | null>(null);
+  const [sowNote, setSowNote] = useState<string | null>(null);
+  // Auto-draft runs ONCE per deviation, not once per render and not on every
+  // nonce bump — a screen that re-drafts on refresh burns two agent calls each
+  // time and can overwrite a draft somebody is reading.
+  const drafted = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -126,9 +136,9 @@ export function InterventionDetail({
 
         const [call, correction] = await Promise.all([
           api.getConversation(found.conversationId),
-          callFn<{ correction: CorrectionRecord | null }>('getCorrection', {
+          callFn<{ correction: CorrectionRecord | null; cmmsPlan?: any }>('getCorrection', {
             deviationId,
-          }).catch(() => ({ correction: null })),
+          }).catch(() => ({ correction: null, cmmsPlan: null })),
         ]);
         if (cancelled) return;
         setConvo(call.conversation);
@@ -137,6 +147,7 @@ export function InterventionDetail({
         // progression survive a refresh rather than living only in this
         // session's action state.
         setCorr(correction.correction);
+        setCmmsPlan((correction as any).cmmsPlan ?? null);
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
       }
@@ -234,6 +245,77 @@ export function InterventionDetail({
         error: err instanceof JudgeTimeout ? null : msg,
         outcome: prev.outcome,
       }));
+    }
+  }
+
+
+  /**
+   * Draft on open, so the human arrives at filled panels rather than a button.
+   *
+   * ONCE PER DEVIATION. Guarded by a ref rather than by correction state,
+   * because a nonce bump re-runs the load and would otherwise re-draft while
+   * somebody is reading — two agent calls and a replaced draft, for nothing.
+   *
+   * Only when nothing has been drafted yet: a deviation that already carries a
+   * correction is read from the database, so reopening costs no model work.
+   *
+   * Drafting never commits. The CMMS and the scope of work are written only by
+   * the buttons, which is what makes drafting early safe.
+   */
+  useEffect(() => {
+    if (!dev || corr || act.busy) return;
+    if (drafted.current === dev.id) return;
+    drafted.current = dev.id;
+    void analyse();
+  }, [dev, corr]);
+
+  /**
+   * Approve the agent-side fix: write it into the scope of work.
+   *
+   * The evals regenerate here, in the browser, because the eval writer is an
+   * agent and no agent may run in a function. A scope of work that changed
+   * without its evals following would keep grading calls against the old text.
+   */
+  async function approveSowFix() {
+    if (!corr) return;
+    setSowNote(null);
+    setAct({ ...IDLE, busy: 'sow' });
+    try {
+      const res = await callFn<{
+        alreadyApplied: boolean;
+        fingerprint: string;
+        changed: boolean;
+        needsEvalRegeneration?: boolean;
+        note?: string;
+      }>('applySowFix', { correctionId: corr.id });
+
+      if (res.alreadyApplied) {
+        setSowNote(res.note || 'The scope of work already carries this fix.');
+      } else if (res.needsEvalRegeneration) {
+        setAct({ ...IDLE, busy: 'evals' });
+        const sow = await api.currentSow();
+        if (sow.sow) {
+          const gen = await generateEvals({
+            fingerprint: sow.sow.fingerprint,
+            title: sow.sow.title,
+            body: sow.sow.body,
+          });
+          setSowNote(`Written into the scope of work · ${gen.saved} evals rewritten`);
+        } else {
+          setSowNote('Written into the scope of work.');
+        }
+      } else {
+        setSowNote('Written into the scope of work.');
+      }
+      setAct({ ...IDLE, busy: null });
+      setNonce((n) => n + 1);
+    } catch (err) {
+      setAct({
+        busy: null,
+        error: err instanceof Error ? err.message : String(err),
+        timeout: null,
+        outcome: null,
+      });
     }
   }
 
@@ -650,12 +732,22 @@ export function InterventionDetail({
           corr={corr}
           status={status}
           act={act}
+          sowNote={sowNote}
           onAnalyse={analyse}
-          onApprove={() => run('approveCorrection', { correctionId: corr?.id ?? `CO-${dev.id}` }, 'approve')}
+          onApprove={approveSowFix}
           onVerify={() => run('verifyCorrection', { correctionId: corr?.id ?? `CO-${dev.id}` }, 'verify')}
         />
 
-        <FixTheRecord dev={dev} corr={corr} rec={rec} />
+        <FixTheRecord
+          dev={dev}
+          corr={corr}
+          rec={rec}
+          plan={cmmsPlan}
+          busy={act.busy}
+          onWrite={() =>
+            run('approveCorrection', { correctionId: corr?.id ?? `CO-${dev.id}` }, 'approve')
+          }
+        />
       </div>
     </div>
   );
@@ -795,6 +887,7 @@ function FixTheAgent({
   status,
   act,
   onAnalyse,
+  sowNote,
   onApprove,
   onVerify,
 }: {
@@ -803,6 +896,8 @@ function FixTheAgent({
   status: { label: string; fg: string };
   act: ActionState;
   onAnalyse: () => void;
+  /** What the last scope-of-work write reported. */
+  sowNote: string | null;
   onApprove: () => void;
   onVerify: () => void;
 }) {
@@ -974,11 +1069,13 @@ function FixTheAgent({
                 ? 'Classifying… (~15s)'
                 : act.busy === 'propose'
                   ? 'Drafting fix… (~20s)'
-                  : act.busy === 'approve'
-                    ? 'Applying…'
-                    : corr
-                      ? 'Approve & apply'
-                      : 'Classify & draft fix'}
+                  : act.busy === 'sow'
+                    ? 'Writing to the scope of work…'
+                    : act.busy === 'evals'
+                      ? 'Rewriting the evals…'
+                      : corr
+                        ? 'Approve fix'
+                        : 'Classify & draft fix'}
             </button>
             {corr && (
               <button className="hue-btn"
@@ -991,9 +1088,11 @@ function FixTheAgent({
               </button>
             )}
             <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--ink-500)' }}>
-              {corr
-                ? 'Nothing is written to the CMMS until you approve.'
-                : 'Both judges run in your browser — the server validates before writing.'}
+              {sowNote
+                ? sowNote
+                : corr
+                  ? 'Approving writes this into the scope of work and rewrites the evals. The CMMS is not touched from here.'
+                  : 'Both judges run in your browser — the server validates before writing.'}
             </span>
           </div>
         )}
@@ -1142,17 +1241,29 @@ function FixTheRecord({
   dev,
   corr,
   rec,
+  plan,
+  busy,
+  onWrite,
 }: {
   dev: DeviationWithEvidence;
   corr: CorrectionRecord | null;
   rec: any;
+  /** Decided by the server from the JOIN, not by the proposer. */
+  plan: { verb: string; recordId: string | null; reason: string } | null;
+  busy: string | null;
+  onWrite: () => void;
 }) {
   const action = corr?.cmmsAction ?? null;
-  const verb = String(action?.verb ?? 'none');
+  // The JOIN decides create vs update. The proposer's own verb is only a
+  // fallback for a draft the server has not weighed in on yet — and it can be
+  // wrong in the one direction that matters, proposing a create for a call that
+  // already has a record.
+  const verb = plan ? plan.verb : String(action?.verb ?? 'none');
   const fields: Array<{ label: string; value: string }> = Array.isArray(action?.fields)
     ? action.fields
     : [];
   const hasAction = verb === 'create' || verb === 'update';
+  const applied = corr?.state === 'applied' || corr?.state === 'verifying' || corr?.state === 'resolved';
 
   return (
     <div
@@ -1259,14 +1370,49 @@ function FixTheRecord({
           </div>
         </div>
 
-        {/* The write itself runs from the approve step, which claims an
-            idempotency key before touching the CMMS. There is no separate
-            fire-here button, because two paths to one write is how you get
-            two service requests. */}
+        {/* ONE button, and the verb on it is the verb the server will run —
+            both read the same join-derived plan, so it cannot offer to create a
+            record while the server updates one. Safe to press twice: approve
+            claims an idempotency key before touching the CMMS. */}
+        {hasAction ? (
+          <button
+            className="hue-btn"
+            onClick={onWrite}
+            disabled={Boolean(busy) || applied}
+            aria-busy={busy === 'approve'}
+            title={plan?.reason}
+            style={{
+              height: 38,
+              borderRadius: 4,
+              border: `1px solid ${applied ? 'var(--border-default)' : 'var(--warning-500)'}`,
+              background: applied ? 'var(--ink-050)' : 'var(--warning-500)',
+              color: applied ? 'var(--ink-500)' : '#fff',
+              fontWeight: 600,
+              fontSize: 13,
+              cursor: busy || applied ? 'not-allowed' : 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 8,
+            }}
+          >
+            {busy === 'approve' ? <span className="hue-spinner" aria-hidden="true" /> : null}
+            {applied
+              ? verb === 'create'
+                ? `Service request created${corr?.appliedRecordId ? ` — SR ${corr.appliedRecordId}` : ''}`
+                : `Service request updated${plan?.recordId ? ` — SR ${plan.recordId}` : ''}`
+              : busy === 'approve'
+                ? 'Writing to the CMMS…'
+                : verb === 'create'
+                  ? 'Create service request'
+                  : `Update service request${plan?.recordId ? ` ${plan.recordId}` : ''}`}
+          </button>
+        ) : null}
+
         <span style={{ fontSize: 11, color: 'var(--ink-500)', textAlign: 'center' }}>
           {hasAction
-            ? `Runs on approval, against the live CMMS. Logged against ${dev.id}.`
-            : `Nothing will be written to the CMMS for ${dev.id} until a correction is drafted and approved.`}
+            ? plan?.reason ?? `Writes to the live CMMS. Logged against ${dev.id}.`
+            : `Nothing will be written to the CMMS for ${dev.id} until a correction is drafted.`}
         </span>
 
         {rec && (
