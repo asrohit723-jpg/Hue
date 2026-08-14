@@ -56,6 +56,22 @@ type ActionState = {
 const IDLE: ActionState = { busy: null, error: null, timeout: null, outcome: null };
 
 /** The stored correction, as `getCorrection` returns it. */
+/**
+ * What the agent is told TODAY about the clause this finding cites.
+ *
+ * `source` says where it came from, and the screen must not blur them: only
+ * 'agent_prompt' is the agent's live configuration, and that one is not
+ * reachable yet. The rest are the scope of work, which is a faithful stand-in
+ * and must be labelled as one.
+ */
+interface CurrentClause {
+  source: 'agent_prompt' | 'generated_eval' | 'sow_clause' | 'sow_no_clause' | 'none';
+  clauseRef: string;
+  text: string;
+  reference: string;
+  reason?: string;
+}
+
 interface CorrectionRecord {
   id: string;
   deviationId: string;
@@ -114,6 +130,9 @@ export function InterventionDetail({
   // rather than by the proposer — so the button cannot promise a create while
   // the server performs an update.
   const [cmmsPlan, setCmmsPlan] = useState<{ verb: string; recordId: string | null; reason: string } | null>(null);
+  // The "before" of the diff: what the agent is told today about this clause.
+  // Read from the scope of work, because its live prompt is not exposed.
+  const [currentClause, setCurrentClause] = useState<CurrentClause | null>(null);
   const [sowNote, setSowNote] = useState<string | null>(null);
   // Auto-draft runs ONCE per deviation, not once per render and not on every
   // nonce bump — a screen that re-drafts on refresh burns two agent calls each
@@ -136,9 +155,10 @@ export function InterventionDetail({
 
         const [call, correction] = await Promise.all([
           api.getConversation(found.conversationId),
-          callFn<{ correction: CorrectionRecord | null; cmmsPlan?: any }>('getCorrection', {
-            deviationId,
-          }).catch(() => ({ correction: null, cmmsPlan: null })),
+          callFn<{ correction: CorrectionRecord | null; cmmsPlan?: any; currentClause?: any }>(
+            'getCorrection',
+            { deviationId },
+          ).catch(() => ({ correction: null, cmmsPlan: null, currentClause: null })),
         ]);
         if (cancelled) return;
         setConvo(call.conversation);
@@ -148,6 +168,7 @@ export function InterventionDetail({
         // session's action state.
         setCorr(correction.correction);
         setCmmsPlan((correction as any).cmmsPlan ?? null);
+        setCurrentClause((correction as any).currentClause ?? null);
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
       }
@@ -733,6 +754,7 @@ export function InterventionDetail({
           status={status}
           act={act}
           sowNote={sowNote}
+          currentClause={currentClause}
           onAnalyse={analyse}
           onApprove={approveSowFix}
           onVerify={() => run('verifyCorrection', { correctionId: corr?.id ?? `CO-${dev.id}` }, 'verify')}
@@ -888,6 +910,7 @@ function FixTheAgent({
   act,
   onAnalyse,
   sowNote,
+  currentClause,
   onApprove,
   onVerify,
 }: {
@@ -898,6 +921,8 @@ function FixTheAgent({
   onAnalyse: () => void;
   /** What the last scope-of-work write reported. */
   sowNote: string | null;
+  /** The clause as it stands today — the left side of the diff. */
+  currentClause: CurrentClause | null;
   onApprove: () => void;
   onVerify: () => void;
 }) {
@@ -982,7 +1007,16 @@ function FixTheAgent({
                 ...microLabel,
               }}
             >
-              Current — {corr?.target || 'target not set'}
+              {/* Named for WHERE it came from. Only 'agent_prompt' is the
+                  agent's live configuration; the rest are the scope of work
+                  standing in for it, and saying so is the difference between a
+                  stand-in and a claim. */}
+              Current —{' '}
+              {currentClause?.source === 'agent_prompt'
+                ? `agent prompt ${currentClause.clauseRef}`
+                : currentClause?.text
+                  ? `scope of work ${currentClause.clauseRef}`
+                  : 'not available'}
             </div>
             <div
               style={{
@@ -990,14 +1024,31 @@ function FixTheAgent({
                 fontFamily: 'var(--font-mono)',
                 fontSize: 12,
                 lineHeight: '19px',
-                color: corr?.beforeText ? 'var(--ink-700)' : 'var(--ink-400)',
+                color: currentClause?.text ? 'var(--ink-700)' : 'var(--ink-400)',
                 background: 'rgba(182,25,25,0.04)',
                 whiteSpace: 'pre-wrap',
                 minHeight: 60,
               }}
             >
-              {corr?.beforeText || '—'}
+              {currentClause?.text ||
+                currentClause?.reason ||
+                "Current prompt not available — the agent's configuration is not exposed."}
             </div>
+            {currentClause?.text ? (
+              <div
+                style={{
+                  padding: '6px 12px',
+                  borderTop: '1px solid var(--border-default)',
+                  fontSize: 11,
+                  color: 'var(--ink-500)',
+                  background: '#fff',
+                }}
+              >
+                {currentClause.source === 'agent_prompt'
+                  ? "From the agent's live prompt."
+                  : `From ${currentClause.reference}. The agent's live prompt is not readable, so this is what it is held to.`}
+              </div>
+            ) : null}
           </div>
           <div style={{ border: '1px solid var(--success-400)', borderRadius: 6, overflow: 'hidden' }}>
             <div

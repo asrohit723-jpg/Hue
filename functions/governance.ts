@@ -3471,6 +3471,103 @@ server.addHandler({
   },
 });
 
+
+/**
+ * What the agent is told TODAY about this clause — the "before" of the diff.
+ *
+ * Hue cannot read agent 6208's live prompt (docs/platform-ask-agent-scope.md),
+ * which is why saveCorrection has always written before_text as ''. An empty
+ * box was honest but useless: a diff with no left side is not a diff.
+ *
+ * The link is `clause_ref`. Every deviation carries one, and the scope of work
+ * is written in those same numbers, so this is a LOOKUP rather than a guess.
+ * Nothing here is inferred: either the exact sentence an eval was written from,
+ * or the clause as it appears in the stored text, or nothing at all.
+ *
+ * ONE SEAM, and it is the one that already exists: when the platform exposes
+ * the agent's own prompt, fetchSowFromAgent stops returning null and its text
+ * becomes the source. The scope of work then falls back to being the fallback.
+ */
+async function currentClauseFor(db: any, criterionId: string, clauseRef: string) {
+  // 1. The live agent prompt, the day it is readable. Stubbed today.
+  const upstream = await fetchSowFromAgent();
+  if (upstream) {
+    const hit = clauseTextIn(String(upstream.body ?? ''), clauseRef);
+    if (hit) return { source: 'agent_prompt', clauseRef, text: hit, reference: 'the agent\'s live prompt' };
+  }
+
+  const sow = currentSowRow(db);
+  if (!sow) {
+    return {
+      source: 'none',
+      clauseRef,
+      text: '',
+      reference: '',
+      reason:
+        "Current prompt not available — the agent's configuration is not exposed, and no scope of work has been pasted.",
+    };
+  }
+
+  // 2. A generated criterion already carries the exact sentence it came from.
+  //    No parsing beats parsing.
+  if (criterionId.startsWith('GEN-')) {
+    const row = db.query(
+      `select source_excerpt, clause_ref from generated_evals
+        where id <> '__seed__' and criterion_id = $1 and sow_fingerprint = $2 limit 1`,
+      [criterionId, String(sow.fingerprint ?? '')],
+    ).rows[0];
+    const excerpt = String(row?.source_excerpt ?? '').trim();
+    if (excerpt) {
+      return {
+        source: 'generated_eval',
+        clauseRef: String(row?.clause_ref ?? clauseRef),
+        text: excerpt,
+        reference: `${sow.title || 'the scope of work'} (${sow.id})`,
+      };
+    }
+  }
+
+  // 3. The clause as written in the pasted text.
+  const hit = clauseTextIn(String(sow.body ?? ''), clauseRef);
+  if (hit) {
+    return {
+      source: 'sow_clause',
+      clauseRef,
+      text: hit,
+      reference: `${sow.title || 'the scope of work'} (${sow.id})`,
+    };
+  }
+
+  return {
+    source: 'sow_no_clause',
+    clauseRef,
+    text: '',
+    reference: `${sow.title || 'the scope of work'} (${sow.id})`,
+    reason: clauseRef
+      ? `Clause ${clauseRef} is not in the pasted scope of work.`
+      : 'This finding carries no clause reference to look up.',
+  };
+}
+
+/**
+ * One clause out of a scope of work, by its reference.
+ *
+ * Anchored at the start of a line so "S-2.1" inside a sentence is not mistaken
+ * for the clause itself, and captured until the next clause marker or a blank
+ * line — a clause that runs to several lines keeps them.
+ */
+function clauseTextIn(body: string, clauseRef: string): string {
+  const ref = String(clauseRef ?? '').trim();
+  if (!ref || !body) return '';
+  const escaped = ref.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(
+    `^[ \\t]*${escaped}\\b[^\\n]*(?:\\n(?![ \\t]*(?:[A-Za-z]+-\\d|\\s*$))[^\\n]*)*`,
+    'm',
+  );
+  const m = re.exec(body);
+  return m ? m[0].trim() : '';
+}
+
 server.addHandler({
   name: 'getCorrection',
   description:
@@ -3483,9 +3580,16 @@ server.addHandler({
       'select * from corrections where deviation_id = $1 order by proposed_at desc limit 1',
       [devId],
     ).rows[0];
-    if (!row) return { correction: null, cmmsPlan: null };
-
     const dev = db.query('select * from deviations where id = $1 limit 1', [devId]).rows[0];
+    // The "before" side is about the DEVIATION, not the correction, so it is
+    // resolved even when nothing has been drafted yet — the panel fills while
+    // the judges are still running.
+    const currentClause = dev
+      ? await currentClauseFor(db, String(dev.criterion_id ?? ''), String(dev.clause_ref ?? ''))
+      : null;
+
+    if (!row) return { correction: null, cmmsPlan: null, currentClause };
+
     const convo = dev
       ? db.query('select * from conversations where id = $1 limit 1', [dev.conversation_id]).rows[0]
       : null;
@@ -3518,6 +3622,7 @@ server.addHandler({
       // What the write would actually do, decided here so the button cannot
       // promise something different from what the server will perform.
       cmmsPlan: cmmsPlanFor(convo, cmmsAction),
+      currentClause,
     };
   },
 });
