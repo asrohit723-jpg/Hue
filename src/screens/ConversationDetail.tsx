@@ -339,6 +339,12 @@ export function ConversationDetail({
             {gradeSummary && (
               <span style={{ color: 'var(--blue-600)', fontWeight: 500 }}> · {gradeSummary}</span>
             )}
+            {!gradeSummary && c.evalStatus === 'not_evaluated' && (
+              <span style={{ color: 'var(--ink-500)' }}>
+                {' '}· not graded yet — the scheduled job picks it up within 15 minutes, or run
+                the evals now
+              </span>
+            )}
           </p>
         </div>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -352,7 +358,7 @@ export function ConversationDetail({
               color: ev.fg,
             }}
           >
-            {label(c.evalStatus)}
+            {c.evalStatus === 'not_evaluated' ? 'Awaiting grading' : label(c.evalStatus)}
           </span>
           {/* Grading is a deliberate act, not a side effect of opening a call —
               the count and the compliance score must hold still while browsing. */}

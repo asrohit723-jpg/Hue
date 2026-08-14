@@ -400,6 +400,21 @@ export const api = {
   patternContext: (criterionId: string) =>
     call<import('./judges').PatternContext>('governance', 'patternContext', { criterionId }),
 
+  /**
+   * How far behind the stored calls are, and how many await grading.
+   * Read-only: safe to call from every open tab at once.
+   */
+  syncStatus: () =>
+    call<{
+      stored: number;
+      available: number | null;
+      reachable: boolean;
+      awaitingIngest: number | null;
+      awaitingGrading: number;
+      graded: number;
+      intervalSeconds: number;
+    }>('governance', 'syncStatus'),
+
   /** Transcript + CMMS record + active criteria, for the call analyst. */
   callAnalysisContext: (conversationId: string) =>
     call<{

@@ -35,7 +35,15 @@ const truncate: React.CSSProperties = {
   whiteSpace: 'nowrap',
 };
 
+type Sync = {
+  awaitingIngest: number | null;
+  awaitingGrading: number;
+  reachable: boolean;
+  intervalSeconds: number;
+};
+
 export function Conversations({ onOpen }: { onOpen: (id: string) => void }) {
+  const [sync, setSync] = useState<Sync | null>(null);
   const [items, setItems] = useState<ConversationView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
@@ -51,6 +59,15 @@ export function Conversations({ onOpen }: { onOpen: (id: string) => void }) {
       try {
         const rows = await api.listConversations(200);
         if (!cancelled) setItems(rows);
+        // Read-only: reports how far behind the channel we are and how much is
+        // waiting on the grading job. Never ingests or grades from here — two
+        // users reloading must not race to write the same call.
+        try {
+          const st = await api.syncStatus();
+          if (!cancelled) setSync(st);
+        } catch {
+          // A sync read failing must not take the call list down with it.
+        }
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
       }
@@ -217,6 +234,56 @@ export function Conversations({ onOpen }: { onOpen: (id: string) => void }) {
         </span>
       </div>
 
+      {sync && (sync.awaitingIngest || sync.awaitingGrading || !sync.reachable) ? (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            flexWrap: 'wrap',
+            marginTop: 12,
+            padding: '9px 14px',
+            borderRadius: 6,
+            background: sync.reachable ? 'var(--blue-025)' : 'var(--warning-050)',
+            border: `1px solid ${sync.reachable ? 'var(--blue-100)' : 'var(--warning-500)'}`,
+            fontSize: 12,
+            color: sync.reachable ? 'var(--blue-600)' : 'var(--warning-700)',
+            lineHeight: '18px',
+          }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 7v5l3 2" />
+          </svg>
+          {!sync.reachable ? (
+            <span>
+              The call channel is unreachable, so this list may be behind. The calls shown are
+              still real.
+            </span>
+          ) : (
+            <>
+              {sync.awaitingIngest ? (
+                <span>
+                  <b style={{ fontWeight: 600 }}>{sync.awaitingIngest}</b>{' '}
+                  {sync.awaitingIngest === 1 ? 'call has' : 'calls have'} arrived on the channel and
+                  {sync.awaitingIngest === 1 ? ' is' : ' are'} not stored yet.
+                </span>
+              ) : null}
+              {sync.awaitingGrading ? (
+                <span>
+                  <b style={{ fontWeight: 600 }}>{sync.awaitingGrading}</b> awaiting grading.
+                </span>
+              ) : null}
+              {/* The interval, not a countdown — the app cannot see when the job
+                  last fired, and inventing a number would be worse than none. */}
+              <span style={{ marginLeft: 'auto', color: 'var(--ink-600)' }}>
+                Syncs automatically every {Math.round(sync.intervalSeconds / 60)} minutes
+              </span>
+            </>
+          )}
+        </div>
+      ) : null}
+
       <div
         style={{
           background: '#fff',
@@ -322,7 +389,7 @@ function CallRow({ c, onOpen }: { c: ConversationView; onOpen: () => void }) {
         <span
           style={{ width: 7, height: 7, borderRadius: 999, background: ev.fg, flex: '0 0 7px' }}
         />
-        {label(c.evalStatus)}
+        {c.evalStatus === 'not_evaluated' ? 'Awaiting grading' : label(c.evalStatus)}
       </span>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 11, minWidth: 0 }}>

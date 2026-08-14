@@ -1012,6 +1012,55 @@ server.addHandler({
 });
 
 server.addHandler({
+  name: 'syncStatus',
+  description:
+    'How far the stored calls are behind the channel, and how many are waiting to be graded. READ ONLY — it writes nothing, so any number of users can call it at once without racing.',
+  parameters: {},
+  execute: async () => {
+    const db = connect();
+
+    const stored = Number(
+      db.query("select count(*) as n from conversations where id <> '__seed__'").rows[0]?.n ?? 0,
+    );
+    const awaitingGrading = Number(
+      db.query(
+        "select count(*) as n from conversations where id <> '__seed__' and eval_status = 'not_evaluated'",
+      ).rows[0]?.n ?? 0,
+    );
+
+    // The channel's own total. A failure here is not an error for the screen —
+    // the stored calls are still real and still listable — so it degrades to
+    // "unknown" rather than taking the page down with it.
+    let available: number | null = null;
+    let reachable = false;
+    try {
+      const payload = await callLogs('list-call-logs', { page: 1, pageSize: 1 });
+      available = Number(payload?.count ?? 0);
+      reachable = true;
+    } catch {
+      reachable = false;
+    }
+
+    // Only ever a shortfall. If the channel reports fewer than we hold — an
+    // older call deleted upstream, say — that is not "negative work to do".
+    const awaitingIngest =
+      available === null ? null : Math.max(available - stored, 0);
+
+    return {
+      stored,
+      available,
+      reachable,
+      awaitingIngest,
+      awaitingGrading,
+      graded: stored - awaitingGrading,
+      // Deliberately NOT a countdown: the app cannot see when the job last
+      // fired, so anything more precise than the interval would be invented.
+      intervalSeconds: 900,
+    };
+  },
+});
+
+server.addHandler({
   name: 'listConversations',
   description: 'List stored conversations, newest first',
   parameters: { limit: { description: 'Max rows', type: 'number' } },
