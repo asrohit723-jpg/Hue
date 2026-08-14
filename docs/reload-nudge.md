@@ -111,10 +111,20 @@ cannot create a unique index (it cannot CREATE TABLE at all). Two fires racing
 to backfill the same never-graded call could both insert a placeholder, and
 each could claim one of the twins.
 
-The cost is a call graded **twice**, not a call graded **wrongly**:
-`deviations` carries a real `UNIQUE (conversation_id, criterion_id)` and
-`writeCallGrade` upserts on a deterministic id, so the second pass converges on
-the same rows the first wrote. Wasted work, never divergent data.
+The cost is a call graded **twice**, not a call graded **wrongly**: both
+`gradeConversation` (deviation id `DV-<convo>-<criterion>`) and
+`writeCallGrade` (`CG-<convo>`) derive a deterministic id and select-then-write
+against it, so the second pass converges on the rows the first wrote. Wasted
+work, never divergent data.
+
+> **Corrected 14 Aug 2026.** An earlier version of this paragraph said
+> `deviations` carries a real `UNIQUE (conversation_id, criterion_id)`. It does
+> not. `facilio vibe db describe deviations` shows the same CSV-imported shape
+> as everything else — all text, all nullable, no constraint. **There is no
+> unique index anywhere in this database**, and only five tables exist; the DDL
+> in `db/schema.sql` documents intent, not what the role was able to create.
+> The conclusion above is unchanged, but it rests on deterministic ids and
+> select-then-write, never on the database refusing a duplicate.
 
 ## Verified on preview
 

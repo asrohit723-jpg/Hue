@@ -22,6 +22,18 @@
 -- record.
 --
 -- Migration rule (preview and production share one schema): ADDITIVE ONLY.
+--
+-- WHAT THIS FILE IS, AS OF 14 Aug 2026: intent, not the live shape. The app's
+-- role cannot CREATE TABLE, so every table that actually exists came from
+-- `facilio vibe db import` — all columns text/numeric and nullable, with NO
+-- primary key, NO unique index and NO foreign key. The constraints written
+-- below were never created. Nothing may rely on the database refusing a
+-- duplicate; the code holds those invariants by deterministic ids and
+-- select-then-write. Run `facilio vibe db describe <table>` for the truth.
+--
+-- Five tables exist: conversations, transcript_turns, deviations, corrections,
+-- call_grades. eval_runs, notifications, criteria and the sow_* tables are
+-- described here but have never been created.
 
 -- ---------------------------------------------------------------
 -- conversations — one call handled by the AI helpdesk agent

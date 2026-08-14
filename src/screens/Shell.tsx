@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { logout, type CurrentUser } from '../lib/vibe';
+import { api, logout, type CurrentUser } from '../lib/vibe';
 import { HEADER_H } from '../lib/layout';
+import { useHashRoute, type ScreenId } from '../lib/route';
 import { Overview } from './Overview';
 import { Conversations } from './Conversations';
 import { ConversationDetail } from './ConversationDetail';
@@ -10,16 +11,12 @@ import { ScopeEvals } from './ScopeEvals';
 import { Patterns } from './Patterns';
 import { Notifications } from './Notifications';
 
-/** Screens, matching the design's `screen` state values. */
-export type ScreenId =
-  | 'overview'
-  | 'convos'
-  | 'convo'
-  | 'ints'
-  | 'int'
-  | 'patterns'
-  | 'scope'
-  | 'notify';
+/**
+ * Screens, matching the design's `screen` state values. Defined with the router
+ * now — the URL is what decides which one is showing, so the two cannot be
+ * allowed to drift apart.
+ */
+export type { ScreenId };
 
 const ACTIVE_BG = 'var(--blue-025)';
 const ACTIVE_FG = 'var(--blue-600)';
@@ -103,16 +100,59 @@ function SectionLabel({ children, top = 6 }: { children: React.ReactNode; top?: 
 }
 
 export function Shell({ me }: { me: CurrentUser }) {
-  const [screen, setScreen] = useState<ScreenId>('overview');
+  // The screen and the open record live in the URL, so a reload comes back to
+  // where you were and a link to a call is a link to that call.
+  const [route, navigate] = useHashRoute();
+  const screen = route.screen;
+  const callId = screen === 'convo' ? route.id : null;
+  const deviationId = screen === 'int' ? route.id : null;
+
   const [query, setQuery] = useState('');
   const [openDeviations, setOpenDeviations] = useState<number | null>(null);
   const [callCount, setCallCount] = useState<number | null>(null);
-  // Selection for the two detail screens.
-  const [callId, setCallId] = useState<string | null>(null);
-  const [deviationId, setDeviationId] = useState<string | null>(null);
 
-  const openCall = (id: string) => { setCallId(id); setScreen('convo'); };
-  const openDeviation = (id: string) => { setDeviationId(id); setScreen('int'); };
+  // Bumped when a refresh finishes, to make the screens that list calls re-read
+  // rather than keep showing what was true before the pull.
+  const [refreshSignal, setRefreshSignal] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshNote, setRefreshNote] = useState<string | null>(null);
+
+  /** Same shape the screens already call, now writing the address bar. */
+  const setScreen = (next: ScreenId) => navigate({ screen: next, id: null });
+  const openCall = (id: string) => navigate({ screen: 'convo', id });
+  const openDeviation = (id: string) => navigate({ screen: 'int', id });
+
+  /**
+   * Pull in any calls that have arrived since the page loaded.
+   *
+   * The server claims an ingest lease before it pulls anything, so two people
+   * pressing this at the same moment cannot both store the same call — one
+   * ingests, the other is told it is already running. Nothing about that is
+   * safe to assume from here, which is why the claim is not in this file.
+   */
+  async function refresh() {
+    if (refreshing) return;
+    setRefreshing(true);
+    setRefreshNote(null);
+    try {
+      const res = await api.refreshCalls();
+      setRefreshNote(
+        res.skipped
+          ? 'Already refreshing'
+          : res.ingested > 0
+            ? `${res.ingested} new call${res.ingested === 1 ? '' : 's'}`
+            : 'Up to date',
+      );
+      // Re-read even when nothing arrived: grading may have moved on since the
+      // page loaded, and a button that says "up to date" over a stale list is
+      // worse than one that says nothing.
+      setRefreshSignal((n) => n + 1);
+    } catch (err) {
+      setRefreshNote(err instanceof Error ? err.message : 'Refresh failed');
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   const initials =
     (me.user.name || me.user.email)
@@ -396,6 +436,56 @@ export function Shell({ me }: { me: CurrentUser }) {
           </div>
 
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 14 }}>
+            {/* What the last press did. Held next to the button rather than
+                announced in a banner — it is a footnote, not a finding. */}
+            {refreshNote ? (
+              <span style={{ fontSize: 12, color: 'var(--ink-500)', whiteSpace: 'nowrap' }}>
+                {refreshNote}
+              </span>
+            ) : null}
+            <button
+              className="hue-btn"
+              onClick={refresh}
+              disabled={refreshing}
+              title="Pull in calls that have arrived since this page loaded"
+              aria-label="Refresh calls"
+              aria-busy={refreshing}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 7,
+                height: 36,
+                padding: '0 12px',
+                borderRadius: 6,
+                border: '1px solid var(--border-default)',
+                background: '#fff',
+                fontSize: 13,
+                fontWeight: 500,
+                color: refreshing ? 'var(--ink-500)' : 'var(--ink-700)',
+                cursor: refreshing ? 'default' : 'pointer',
+              }}
+            >
+              {/* The app's own spinner, which stops spinning for anyone who
+                  asked for reduced motion. An inline animation would not. */}
+              {refreshing ? (
+                <span className="hue-spinner" />
+              ) : (
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.9"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                  <polyline points="21 3 21 9 15 9" />
+                </svg>
+              )}
+              {refreshing ? 'Refreshing…' : 'Refresh'}
+            </button>
             <span style={{ width: 1, height: 24, background: 'var(--border-default)' }} />
             <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
               <span
@@ -448,7 +538,10 @@ export function Shell({ me }: { me: CurrentUser }) {
         {/* SCROLL AREA */}
         <div style={{ flex: 1, overflowY: 'auto' }}>
           {screen === 'overview' && (
+            // Remounted by a refresh: Overview holds no typing or filters worth
+            // preserving, and its counts are the first thing a pull changes.
             <Overview
+              key={refreshSignal}
               onCounts={(calls, open) => {
                 setCallCount(calls);
                 setOpenDeviations(open);
@@ -457,7 +550,9 @@ export function Shell({ me }: { me: CurrentUser }) {
               onNavigate={setScreen}
             />
           )}
-          {screen === 'convos' && <Conversations onOpen={openCall} />}
+          {/* Given the signal rather than remounted — a refresh must not throw
+              away a search or a filter the user typed. */}
+          {screen === 'convos' && <Conversations onOpen={openCall} refreshSignal={refreshSignal} />}
           {screen === 'convo' && callId && (
             <ConversationDetail
               id={callId}

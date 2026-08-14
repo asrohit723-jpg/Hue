@@ -450,6 +450,22 @@ export const api = {
     }>('governance', 'syncStatus'),
 
   /**
+   * Pull in any calls that have arrived since the page loaded.
+   *
+   * The server takes an ingest lease before it stores anything, so two people
+   * pressing Refresh at the same moment cannot write the same call twice —
+   * `skipped` means someone else's pull is already doing the work.
+   */
+  refreshCalls: () =>
+    call<{
+      skipped: boolean;
+      reason?: string;
+      ingested: number;
+      conversationIds: string[];
+      failed?: Array<{ callLogId: string; error: string }>;
+    }>('callingest', 'refresh'),
+
+  /**
    * Ask the server to grade a call or two NOW instead of waiting for the job.
    *
    * Safe to call from every open tab: the server claims each call before

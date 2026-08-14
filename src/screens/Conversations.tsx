@@ -42,7 +42,14 @@ type Sync = {
   intervalSeconds: number;
 };
 
-export function Conversations({ onOpen }: { onOpen: (id: string) => void }) {
+export function Conversations({
+  onOpen,
+  refreshSignal = 0,
+}: {
+  onOpen: (id: string) => void;
+  /** Bumped by the header's Refresh once a pull has finished. */
+  refreshSignal?: number;
+}) {
   const [sync, setSync] = useState<Sync | null>(null);
   const [items, setItems] = useState<ConversationView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -56,6 +63,17 @@ export function Conversations({ onOpen }: { onOpen: (id: string) => void }) {
   // again on the way back, and a page that grades on every render is exactly
   // the runaway this whole claim mechanism is meant to prevent.
   const nudged = useRef(false);
+
+  // A refresh that pulls in new calls should get them graded, not leave them at
+  // "awaiting grading" for up to fifteen minutes. Re-arming the guard lets the
+  // fetch below nudge once for what just arrived — still one nudge per refresh.
+  //
+  // Declared BEFORE that effect on purpose: effects run in declaration order,
+  // so re-arming here happens before the fetch reads the guard. Below it, the
+  // nudge would always be one refresh behind.
+  useEffect(() => {
+    if (refreshSignal > 0) nudged.current = false;
+  }, [refreshSignal]);
 
   useEffect(() => {
     let cancelled = false;
@@ -101,7 +119,7 @@ export function Conversations({ onOpen }: { onOpen: (id: string) => void }) {
     return () => {
       cancelled = true;
     };
-  }, [nonce]);
+  }, [nonce, refreshSignal]);
 
   const sites = useMemo(
     () => [

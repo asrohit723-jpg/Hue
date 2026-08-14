@@ -378,96 +378,216 @@ server.addHandler({
       type: 'number',
     },
   },
-  execute: async (args) => {
-    const db = connect();
-    const limit = Math.min(Number(args.limit) || 20, 100);
-    const pageSize = Math.min(Number(args.pageSize) || 50, 100);
-    const maxPages = Math.min(Number(args.maxPages) || 5, 20);
+  execute: async (args) =>
+    await pollNewCalls({
+      limit: Math.min(Number(args.limit) || 20, 100),
+      pageSize: Math.min(Number(args.pageSize) || 50, 100),
+      maxPages: Math.min(Number(args.maxPages) || 5, 20),
+      backfill: Number(args.backfill) === 1,
+    }),
+});
 
-    // The watermark is an optimisation for the steady state: newest-first plus
-    // "stop at the first call already stored" is the cheapest way to pick up
-    // what has happened since the last run.
-    //
-    // It cannot backfill, though — anything OLDER than a stored call is behind
-    // the stopping point and would never be reached. That matters on first
-    // adoption, where an org's whole call history sits below the first call
-    // ingested. Backfill mode skips stored calls and keeps walking instead.
-    const backfill = Number(args.backfill) === 1;
+/**
+ * Pull new calls from the connection and store them.
+ *
+ * Extracted from the `poll` handler so the header's Refresh button runs THIS,
+ * not a second copy of it. Two ingest implementations would drift, and the one
+ * that drifted would be the one a person presses.
+ *
+ * The watermark is an optimisation for the steady state: newest-first plus
+ * "stop at the first call already stored" is the cheapest way to pick up what
+ * has happened since the last run.
+ *
+ * It cannot backfill, though — anything OLDER than a stored call is behind the
+ * stopping point and would never be reached. That matters on first adoption,
+ * where an org's whole call history sits below the first call ingested.
+ * Backfill mode skips stored calls and keeps walking instead.
+ */
+async function pollNewCalls(opts: {
+  limit: number;
+  pageSize: number;
+  maxPages: number;
+  backfill: boolean;
+}) {
+  const db = connect();
+  const { limit, pageSize, maxPages, backfill } = opts;
 
-    const ingested: string[] = [];
-    const skipped: string[] = [];
-    const skippedStored: string[] = [];
-    const failed: Array<{ callLogId: string; error: string }> = [];
-    let listed = 0;
-    let stoppedAt: string | null = null;
+  const ingested: string[] = [];
+  const skipped: string[] = [];
+  const skippedStored: string[] = [];
+  const failed: Array<{ callLogId: string; error: string }> = [];
+  let listed = 0;
+  let stoppedAt: string | null = null;
 
-    outer: for (let page = 1; page <= maxPages; page++) {
-      const payload = await callLogs('list-call-logs', { page, pageSize });
-      const rows = listOf(payload);
-      if (!rows.length) break;
-      listed += rows.length;
+  outer: for (let page = 1; page <= maxPages; page++) {
+    const payload = await callLogs('list-call-logs', { page, pageSize });
+    const rows = listOf(payload);
+    if (!rows.length) break;
+    listed += rows.length;
 
-      for (const row of rows) {
-        const callLogId = String(row?.id ?? '').trim();
-        if (!callLogId) continue;
+    for (const row of rows) {
+      const callLogId = String(row?.id ?? '').trim();
+      if (!callLogId) continue;
 
-        // The watermark. The list is newest-first, so the first already-stored
-        // call means everything after it is older and also stored.
-        const already = db.query('select id from conversations where call_id = $1 limit 1', [
-          callLogId,
-        ]).rows[0];
-        if (already) {
-          if (!backfill) {
-            stoppedAt = callLogId;
-            break outer;
-          }
-          skippedStored.push(callLogId);
+      // The watermark. The list is newest-first, so the first already-stored
+      // call means everything after it is older and also stored.
+      const already = db.query('select id from conversations where call_id = $1 limit 1', [
+        callLogId,
+      ]).rows[0];
+      if (already) {
+        if (!backfill) {
+          stoppedAt = callLogId;
+          break outer;
+        }
+        skippedStored.push(callLogId);
+        continue;
+      }
+
+      // A call still in progress has a transcript that is not finished. Leave
+      // it for a later run rather than storing a partial conversation and
+      // grading the agent on half a call.
+      if (String(row?.status ?? '').toUpperCase() === 'IN_PROGRESS') {
+        skipped.push(callLogId);
+        continue;
+      }
+
+      try {
+        const { record, turns, via } = await fetchCall(callLogId);
+        if (!turns.length) {
+          failed.push({ callLogId, error: 'no transcript from get-call-log or export' });
           continue;
         }
-
-        // A call still in progress has a transcript that is not finished. Leave
-        // it for a later run rather than storing a partial conversation and
-        // grading the agent on half a call.
-        if (String(row?.status ?? '').toUpperCase() === 'IN_PROGRESS') {
-          skipped.push(callLogId);
-          continue;
+        const { id } = upsertLiveCall(db, { ...row, ...record, id: callLogId }, turns);
+        ingested.push(id);
+        if (ingested.length >= limit) {
+          stoppedAt = 'limit';
+          break outer;
         }
-
-        try {
-          const { record, turns, via } = await fetchCall(callLogId);
-          if (!turns.length) {
-            failed.push({ callLogId, error: 'no transcript from get-call-log or export' });
-            continue;
-          }
-          const { id } = upsertLiveCall(db, { ...row, ...record, id: callLogId }, turns);
-          ingested.push(id);
-          if (ingested.length >= limit) {
-            stoppedAt = 'limit';
-            break outer;
-          }
-        } catch (err) {
-          // One bad call must not abort the batch.
-          failed.push({ callLogId, error: err instanceof Error ? err.message : String(err) });
-        }
+      } catch (err) {
+        // One bad call must not abort the batch.
+        failed.push({ callLogId, error: err instanceof Error ? err.message : String(err) });
       }
     }
+  }
 
-    return {
-      source: CALL_LOGS,
-      mode: backfill ? 'backfill' : 'watermark',
-      listed,
-      ingested: ingested.length,
-      conversationIds: ingested,
-      skippedInProgress: skipped,
-      skippedAlreadyStored: backfill ? skippedStored.length : 0,
-      failed,
-      stoppedAt,
-      note: ingested.length
-        ? 'Run governance.evaluate on each new conversation to join it to the CMMS, then governance.evaluateSemantic per semantic criterion.'
-        : backfill
-          ? 'Every call the connection lists is already stored.'
-          : 'Nothing new since the newest stored call.',
-    };
+  return {
+    source: CALL_LOGS,
+    mode: backfill ? 'backfill' : 'watermark',
+    listed,
+    ingested: ingested.length,
+    conversationIds: ingested,
+    skippedInProgress: skipped,
+    skippedAlreadyStored: backfill ? skippedStored.length : 0,
+    failed,
+    stoppedAt,
+    note: ingested.length
+      ? 'Run governance.evaluate on each new conversation to join it to the CMMS, then governance.evaluateSemantic per semantic criterion.'
+      : backfill
+        ? 'Every call the connection lists is already stored.'
+        : 'Nothing new since the newest stored call.',
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The Refresh button's ingest
+//
+// Ingest from a browser was rejected once, for a good reason: upsertLiveCall is
+// select-then-insert and this database has NO unique index anywhere (every table
+// came from `db import`), so two people pulling at the same moment both see "not
+// stored" and both insert. The id is derived from the call log id, so the result
+// is the same call twice in the list.
+//
+// A button makes that reachable in a way a single scheduled job never did, so
+// the pull takes a lease first. Same shape as the grading claim in
+// governance.ts: one atomic UPDATE, and only the fire that gets a row back does
+// any work.
+// ---------------------------------------------------------------------------
+
+/**
+ * The lease row.
+ *
+ * It lives in `call_grades` because that is the only table with claimed_at /
+ * claimed_by, and its conversation_id matches no conversation — so it never
+ * joins, never gets claimed as a grade, and is invisible to every existing
+ * reader. Reusing the columns beats inventing a table the role cannot create.
+ */
+const LEASE_ID = 'LEASE-ingest';
+const LEASE_CONVO = '__lease__';
+
+/** Long enough for a five-call pull, short enough that a dead tab is not felt. */
+const LEASE_TTL_MS = 120 * 1000;
+
+const leaseStamp = (msAgo = 0) =>
+  new Date(Date.now() - msAgo).toISOString().replace(/\.\d{3}Z$/, 'Z');
+
+/**
+ * Take the ingest lease, or report that someone else holds it.
+ *
+ * The row is created on first use — there is no migration to add it, and a
+ * missing lease must not mean "no lock, go ahead". The insert races only the
+ * very first time; every pull after that is the atomic UPDATE below.
+ */
+function claimIngest(db: any, by: string): boolean {
+  const existing = db.query('select id from call_grades where id = $1 limit 1', [LEASE_ID])
+    .rows[0];
+  if (!existing) {
+    db.query(
+      `insert into call_grades (id, conversation_id, claimed_at, claimed_by, graded_at, graded_by,
+                                applicable, response_quality, schema_version)
+       values ($1,$2,'','','','','',null,1)`,
+      [LEASE_ID, LEASE_CONVO],
+    );
+  }
+
+  // Free when never held, or held by a run that died before releasing.
+  const { rows } = db.query(
+    `update call_grades set claimed_at = $2, claimed_by = $3
+      where id = $1 and (claimed_at is null or claimed_at = '' or claimed_at < $4)
+     returning id`,
+    [LEASE_ID, leaseStamp(), by, leaseStamp(LEASE_TTL_MS)],
+  );
+  return rows.length > 0;
+}
+
+/** Hand it back immediately, rather than making the next press wait out the TTL. */
+function releaseIngest(db: any, by: string) {
+  db.query(`update call_grades set claimed_at = '', claimed_by = '' where id = $1 and claimed_by = $2`, [
+    LEASE_ID,
+    by,
+  ]);
+}
+
+server.addHandler({
+  name: 'refresh',
+  description:
+    'Pull in any calls that have arrived since the page loaded — what the header Refresh button runs. Takes an ingest lease first, so two people pressing it at once cannot store the same call twice. Runs the same ingest as the scheduled job.',
+  parameters: {
+    limit: { description: 'Max calls to pull this press (default 5)', type: 'number' },
+  },
+  execute: async (args) => {
+    // Small on purpose: someone is watching a spinner. The scheduled job owns
+    // the backlog; this only closes the gap since the page loaded.
+    const limit = Math.min(Math.max(Number(args.limit) || 5, 1), 20);
+    const db = connect();
+    const by = `refresh-${Date.now().toString(36)}`;
+
+    if (!claimIngest(db, by)) {
+      // Not an error. Someone else's pull is already doing this work, and its
+      // results are what the caller wanted — so re-read, do not re-ingest.
+      return {
+        skipped: true,
+        reason: 'Another refresh is already running',
+        ingested: 0,
+        conversationIds: [],
+      };
+    }
+
+    try {
+      const res = await pollNewCalls({ limit, pageSize: 50, maxPages: 3, backfill: false });
+      return { skipped: false, ...res };
+    } finally {
+      releaseIngest(db, by);
+    }
   },
 });
 
