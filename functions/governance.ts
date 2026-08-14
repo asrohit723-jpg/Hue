@@ -477,14 +477,18 @@ server.addHandler({
 // The join + deterministic checks — the spine
 // ---------------------------------------------------------------------------
 
-server.addHandler({
-  name: 'evaluate',
-  description:
-    'Join one stored transcript to its REAL CMMS service request and run the deterministic checks against that live record.',
-  parameters: { conversationId: { description: 'Conversation id', type: 'string' } },
-  execute: async (args) => {
-    const convoId = String(args.conversationId ?? '').trim();
-    if (!convoId) throw new Error('conversationId is required');
+/**
+ * The deterministic grading core: join one stored call to its live CMMS
+ * service request and run the code-answerable checks against that record.
+ *
+ * Extracted so the manual path and the scheduled job share ONE implementation.
+ * Two copies of this logic would drift the moment either was touched, and the
+ * whole point of grading automatically is that it agrees with grading by hand.
+ *
+ * No agent is called from here — every check is plain code, which is exactly
+ * why this half CAN run inside a scheduled function.
+ */
+async function gradeConversation(convoId: string) {
 
     const db = connect();
     const convo = db.query('select * from conversations where id = $1 limit 1', [convoId]).rows[0];
@@ -831,12 +835,95 @@ server.addHandler({
         summary: f.summary,
       })),
     };
+}
+
+server.addHandler({
+  name: 'evaluate',
+  description:
+    'Join one stored transcript to its REAL CMMS service request and run the deterministic checks against that live record.',
+  parameters: { conversationId: { description: 'Conversation id', type: 'string' } },
+  execute: async (args) => {
+    const convoId = String(args.conversationId ?? '').trim();
+    if (!convoId) throw new Error('conversationId is required');
+    return await gradeConversation(convoId);
   },
 });
 
 // ---------------------------------------------------------------------------
 // Screens
 // ---------------------------------------------------------------------------
+
+server.addHandler({
+  name: 'gradeUngraded',
+  description:
+    'Grade every call the ingest has stored but nothing has evaluated yet. Runs the SAME deterministic core as the manual path. Scheduled — see the pull-call-logs and grade-new-calls jobs.',
+  parameters: {
+    limit: { description: 'Max calls to grade this fire', type: 'number' },
+    budgetSeconds: { description: 'Stop starting new calls after this many seconds', type: 'number' },
+  },
+  execute: async (args) => {
+    const db = connect();
+
+    // A fire must finish inside the job's wall clock. Deterministic grading is
+    // 2-5s per call (a CMMS join plus code), so the cap is generous — but it is
+    // a cap, not a hope: the loop stops starting work once the budget is spent
+    // and reports what it left, rather than being killed mid-write.
+    const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 50);
+    const budgetMs = Math.min(Math.max(Number(args.budgetSeconds) || 600, 30), 840) * 1000;
+    const startedAt = Date.now();
+
+    const { rows } = db.query(
+      `select id from conversations
+        where id <> '__seed__' and eval_status = 'not_evaluated'
+        order by started_at desc
+        limit $1`,
+      [limit],
+    );
+
+    const graded: Array<{ id: string; findings: number; join: string | null }> = [];
+    const failed: Array<{ id: string; error: string }> = [];
+    let stoppedForBudget = false;
+
+    for (const r of rows) {
+      if (Date.now() - startedAt > budgetMs) {
+        stoppedForBudget = true;
+        break;
+      }
+      try {
+        const res = await gradeConversation(String(r.id));
+        graded.push({
+          id: String(r.id),
+          findings: res.deviationsFound ?? 0,
+          join: res.join?.cmmsSrId ?? null,
+        });
+      } catch (err) {
+        // One bad call must not abort the fire — the rest still get graded, and
+        // an ungraded call simply stays ungraded for the next one.
+        failed.push({ id: String(r.id), error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    const remaining = Number(
+      db.query(
+        "select count(*) as n from conversations where id <> '__seed__' and eval_status = 'not_evaluated'",
+      ).rows[0]?.n ?? 0,
+    );
+
+    return {
+      candidates: rows.length,
+      graded: graded.length,
+      details: graded,
+      failed,
+      stoppedForBudget,
+      stillUngraded: remaining,
+      elapsedSeconds: Math.round((Date.now() - startedAt) / 1000),
+      note:
+        'Deterministic checks only. The semantic judges and the call analyst cannot run here — ' +
+        'a Studio Function aborts a fetch at ~10s and every agent call takes longer. Those stay on ' +
+        'the browser-side "Run evals" action.',
+    };
+  },
+});
 
 server.addHandler({
   name: 'overview',
