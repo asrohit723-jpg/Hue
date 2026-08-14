@@ -282,3 +282,29 @@ CREATE INDEX IF NOT EXISTS notifications_state_idx ON notifications (state);
 -- There is no DROP and no ALTER on this path. A further column means a further
 -- table, which is why schema_version is here.
 -- ---------------------------------------------------------------
+
+-- ---------------------------------------------------------------
+-- conversation_channels — how each conversation reached the agent
+--
+-- Created by `facilio vibe db import` (db/seed/conversation_channels.csv),
+-- like call_grades: the app's role cannot CREATE TABLE, and conversations
+-- itself cannot be ALTERed to carry a channel column.
+--
+-- The connection returns callType and channelId on every row and this app used
+-- to discard both, so every conversation became "a call" — which is how a WEB
+-- conversation's email address ended up in caller_phone, under a heading that
+-- said phone number.
+--
+--   * SINGLE WRITER: callingest.writeConversationChannel, called only from
+--     upsertLiveCall. governance.ts reads this table and never writes it.
+--   * modality decides what may be CHECKED, and is the only thing the grading
+--     path reads. 'voice' = PHONE and WEB (WEB is the browser web-call widget,
+--     speech through a browser, not a text chat). 'text' = WHATSAPP, CHAT,
+--     EMAIL. An UNRECOGNISED channel is text, never voice — voice is the
+--     permissive case and must never be the default for something unknown.
+--   * A conversation with NO row here is voice: everything that predates
+--     channel tagging is a call, and the seeded demo calls always were.
+--   * identity_kind says what conversations.caller_phone actually holds on
+--     this channel — 'phone', 'email' or 'handle'. The upstream field is
+--     polymorphic and the column name is a historical accident.
+-- ---------------------------------------------------------------

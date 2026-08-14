@@ -348,6 +348,94 @@ function readGrade(row: any) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Channel
+//
+// A conversation is not always a phone call. The connection reports PHONE and
+// WEB today (both voice — WEB is the browser web-call widget, not a text chat)
+// and models WHATSAPP/CHAT/EMAIL, which this app must not grade as if someone
+// had spoken.
+//
+// Channel is recorded at ingest into conversation_channels, whose only writer
+// is callingest.writeConversationChannel. This file READS it and never writes
+// it — same split that keeps call_grades honest.
+// ---------------------------------------------------------------------------
+
+/**
+ * How a conversation must be graded.
+ *
+ * Anything with no channel row is voice: every conversation that predates
+ * channel tagging is a call, and the seeded demo calls always were. The default
+ * is stated once, here, so no caller has to guess.
+ */
+function channelOf(row: any) {
+  const channel = String(row?.channel ?? '').trim().toUpperCase() || 'PHONE';
+  const modality = String(row?.modality ?? '').trim().toLowerCase() || 'voice';
+  return {
+    channel,
+    channelId: Number(row?.channel_id) || 0,
+    modality,
+    isVoice: modality === 'voice',
+    identityKind: String(row?.identity_kind ?? '').trim() || 'phone',
+  };
+}
+
+/**
+ * Criteria that CANNOT be answered on this conversation, and why.
+ *
+ * Two different reasons, kept apart because they resolve differently — one
+ * never will, the other resolves the day a text parser is wired:
+ *
+ *   channel   the check is about something only a voice call has. A WhatsApp
+ *             thread cannot "drop", and stacking two questions in one message
+ *             is normal there — flagging either would be inventing a failure.
+ *
+ *   no_join   the check reads the CMMS record, and on a text channel this app
+ *             has not yet resolved one. `writtenSrNumber` is stubbed until
+ *             there is real text data to test it against, so a text
+ *             conversation has no claimed reference and no join. Running these
+ *             anyway would report "no service request exists" when the truth is
+ *             "nobody looked" — a false finding, and the loudest kind: CR-LOG-01
+ *             is critical.
+ *
+ * NEITHER IS A PASS. A skipped criterion is reported as not-applicable, which
+ * is distinct from "passed" and from "the judge never answered". That is the
+ * same never-fake-a-pass rule this app runs on, applied to a third case.
+ */
+function notApplicableFor(modality: string): Record<string, string> {
+  if (modality === 'voice') return {};
+  return {
+    // Voice-only by nature.
+    'CR-ESC-04': 'channel',
+    'CR-CALL-02': 'channel',
+    // Answerable on text, but only once the join is checked.
+    'CR-LOG-01': 'no_join',
+    'CR-LOG-02': 'no_join',
+    'CR-LOG-04': 'no_join',
+    'CR-LOG-06': 'no_join',
+    'CR-CAT-01': 'no_join',
+    'CR-SCHED-01': 'no_join',
+    'CR-SCHED-02': 'no_join',
+    'CR-CALL-01': 'no_join',
+  };
+}
+
+/** Why a criterion was skipped, in words a person reads on the screen. */
+function skipReason(reason: string, channel: string): string {
+  return reason === 'channel'
+    ? `Not applicable on ${channel}: this check is about something only a voice call has.`
+    : `Not checked on ${channel}: the service request reference is not parsed on text channels yet, so there is no CMMS record to judge against. Not a pass, and not a failure.`;
+}
+
+/** The channel row for one conversation, or null when it was never tagged. */
+function channelRowOf(db: any, convoId: string) {
+  return db.query(
+    `select * from conversation_channels
+      where conversation_id = $1 and id <> '__seed__' limit 1`,
+    [convoId],
+  ).rows[0];
+}
+
 /**
  * Where one call is in grading, derived from state that already exists.
  *
@@ -610,6 +698,10 @@ async function gradeConversation(convoId: string) {
     // difference between "did not happen" and "is not recorded here".
     const isLiveCall = String(convo.id ?? '').startsWith('L-');
 
+    // How this conversation arrived, which decides what may be checked at all.
+    const chan = channelOf(channelRowOf(db, convoId));
+    const inapplicable = notApplicableFor(chan.modality);
+
     // ---- 1. Resolve the join against the LIVE CMMS -----------------------
     // Strongest signal first: the SR number the agent read back. Falling back
     // to site + time window, which is weaker and recorded as such.
@@ -619,7 +711,18 @@ async function gradeConversation(convoId: string) {
 
     const claimedNumber = String(convo.sr_number_claimed ?? '').trim();
 
-    if (claimedNumber) {
+    // A TEXT conversation is not joined at all yet, and says so.
+    //
+    // The reference on a text channel is typed, not spoken, and this app has no
+    // parser for it — writtenSrNumber is deliberately stubbed until there is
+    // real text data to test against. Falling through to the site+time window
+    // would be worse than doing nothing: it guesses, and a guessed join is
+    // indistinguishable from the agent inventing a reference, which is the
+    // exact failure Hue exists to catch. 'not_checked' is neither a match nor
+    // "no record" — it is the truth, that nobody looked.
+    if (!chan.isVoice) {
+      joinMethod = 'not_checked';
+    } else if (claimedNumber) {
       // The agent read a specific record id back to the caller. Resolve on that
       // id and NOTHING else: `id(equals)=N` is the verified filter syntax.
       //
@@ -703,6 +806,25 @@ async function gradeConversation(convoId: string) {
       evidence: any[];
     }> = [];
 
+    /**
+     * A check that cannot be answered on this channel is SKIPPED, not failed.
+     *
+     * Every deterministic check below is wrapped in this. A criterion in the
+     * inapplicable set never reaches its own logic, so there is no path by
+     * which a text conversation produces a voice-shaped finding.
+     */
+    const skipped: Array<{ criterionId: string; reason: string; detail: string }> = [];
+    const applicable = (criterionId: string): boolean => {
+      const reason = inapplicable[criterionId];
+      if (!reason) return true;
+      skipped.push({
+        criterionId,
+        reason,
+        detail: skipReason(reason, chan.channel),
+      });
+      return false;
+    };
+
     // What the agent actually told the caller, read from the transcript at
     // evaluation time rather than taken from the stored sr_claimed flag.
     //
@@ -725,7 +847,7 @@ async function gradeConversation(convoId: string) {
     // would be a fourth, but the voice channel does not expose them (see
     // `callToolCalls`), so the claim is established from speech alone — which
     // is exactly what the caller was told and went away believing.
-    if (srClaimed && !matched) {
+    if (applicable('CR-LOG-01') && srClaimed && !matched) {
       const named = claim.number || String(convo.sr_number_claimed ?? '').trim();
       const who = convo.caller_name || convo.caller_phone || 'the caller';
 
@@ -775,7 +897,7 @@ async function gradeConversation(convoId: string) {
       hasToolLog &&
       srClaimed &&
       !turns.some((t: any) => t.tool_name && t.tool_status === 'success' && t.tool_record_id);
-    if (confirmedWithoutId) {
+    if (applicable('CR-LOG-02') && confirmedWithoutId) {
       findings.push({
         criterionId: 'CR-LOG-02',
         clauseRef: 'S-2.1',
@@ -796,7 +918,7 @@ async function gradeConversation(convoId: string) {
     // CR-ESC-04 — a call that drops before confirmation must raise a callback
     // task. A drop is not a completed call, and the caller is left believing
     // nothing was recorded — which here is true.
-    if (String(convo.status ?? '') === 'dropped' && !matched) {
+    if (applicable('CR-ESC-04') && String(convo.status ?? '') === 'dropped' && !matched) {
       const hasCallback = turns.some(
         (t: any) => t.tool_name && /callback/i.test(String(t.tool_name)) && t.tool_status === 'success',
       );
@@ -841,7 +963,7 @@ async function gradeConversation(convoId: string) {
       (t: any) => t.performer === 'caller' && String(t.message ?? '').trim(),
     );
 
-    if (missing.length && callerSpoke) {
+    if (applicable('CR-CALL-01') && missing.length && callerSpoke) {
       findings.push({
         criterionId: 'CR-CALL-01',
         clauseRef: 'S-6.1',
@@ -923,15 +1045,28 @@ async function gradeConversation(convoId: string) {
         convoId,
       ]).rows[0]?.n ?? 0,
     );
+    //
+    // 'skipped' is the frozen contract's own fourth value and this is what it
+    // is for: nothing failed among the checks that RAN, but some could not run
+    // on this channel. Calling that 'passed' would be the conversation-level
+    // version of the fake pass this app refuses everywhere else.
     db.query('update conversations set eval_status=$2 where id=$1', [
       convoId,
-      openNow ? 'flagged' : 'passed',
+      openNow ? 'flagged' : skipped.length ? 'skipped' : 'passed',
     ]);
 
     return {
       conversationId: convoId,
+      channel: chan.channel,
+      modality: chan.modality,
+      // What could not be answered here, and why. Never empty on a text
+      // conversation, and never reported as a pass.
+      skipped,
       join: { cmmsSrId: srId || null, method: joinMethod, confidence: joinConfidence },
-      checksRun: 3,
+      // The deterministic checks that could fire at all. On text every one of
+      // them reads the CMMS record, and there is no join yet, so none can —
+      // saying 3 there would be claiming work that did not happen.
+      checksRun: chan.isVoice ? 3 : 0,
       deviationsFound: written,
       retracted,
       findings: findings.map((f) => ({
@@ -1293,16 +1428,32 @@ server.addHandler({
     // "compliance score" is read as anyway.
     const cleanCalls = Number(
       db.query(
+        // 'passed' and 'flagged' only. A 'skipped' conversation had checks it
+        // could not run, so counting it as clean would inflate compliance with
+        // work nobody did. No voice call is ever 'skipped', so this leaves the
+        // existing numbers exactly where they were.
         `select count(*) as n from conversations c
-          where c.id <> '__seed__' and c.eval_status <> 'not_evaluated'
+          where c.id <> '__seed__' and c.eval_status in ('passed','flagged')
             and not exists (
               select 1 from deviations d
                where d.conversation_id = c.id and d.status = 'open')`,
       ).rows[0]?.n ?? 0,
     );
 
+    // Compliance is over FULLY checked conversations only. `evaluated` still
+    // drives coverage — a partially checked conversation has been looked at,
+    // which is what coverage measures — but it cannot sit in the denominator of
+    // a pass rate whose numerator it can never join. Today no conversation is
+    // 'skipped', so both numbers are unchanged.
+    const fullyChecked = Number(
+      db.query(
+        `select count(*) as n from conversations c
+          where c.id <> '__seed__' and c.eval_status in ('passed','flagged')`,
+      ).rows[0]?.n ?? 0,
+    );
+
     const coverage = convoCount ? Math.round((evaluated / convoCount) * 100) : 0;
-    const compliance = evaluated ? Math.round((cleanCalls / evaluated) * 100) : 100;
+    const compliance = fullyChecked ? Math.round((cleanCalls / fullyChecked) * 100) : 100;
 
     return {
       callsToday: convoCount,
@@ -1393,16 +1544,21 @@ server.addHandler({
                 order by t.turn_index
                 limit 1) as snippet,
               g.claimed_at, g.claimed_by, g.graded_at, g.graded_by,
-              g.criteria_graded, g.criteria_unavailable
+              g.criteria_graded, g.criteria_unavailable,
+              ch.channel, ch.channel_id, ch.modality, ch.identity_kind
          from conversations c
          left join call_grades g
                 on g.conversation_id = c.id and g.id <> '__seed__'
+         left join conversation_channels ch
+                on ch.conversation_id = c.id and ch.id <> '__seed__'
         where c.id <> '__seed__'
         order by c.started_at desc
         limit $1`,
       [limit],
     );
-    return { items: rows.map((r: any) => ({ ...r, grading: gradingStateOf(r) })) };
+    return {
+      items: rows.map((r: any) => ({ ...r, grading: gradingStateOf(r), channel: channelOf(r) })),
+    };
   },
 });
 
@@ -1525,6 +1681,18 @@ server.addHandler({
     ).rows[0];
     const grading = gradingStateOf({ ...(claimRow ?? {}), eval_status: convo.eval_status });
 
+    // How the conversation arrived, and what that means cannot be judged on it.
+    // Both derived, never stored: a second copy of "which checks apply" would
+    // be a second thing to keep in step with the checks themselves.
+    const channel = channelOf(channelRowOf(db, id));
+    const notApplicable = Object.entries(notApplicableFor(channel.modality)).map(
+      ([criterionId, reason]) => ({
+        criterionId,
+        reason,
+        detail: skipReason(reason, channel.channel),
+      }),
+    );
+
     // Ground truth, fetched live at read time.
     //
     // The filter must be `id(equals)=N`, the same verified syntax the join
@@ -1555,6 +1723,8 @@ server.addHandler({
       cmmsRecord,
       grade,
       grading,
+      channel,
+      notApplicable,
     };
   },
 });
@@ -2095,6 +2265,20 @@ server.addHandler({
       [convoId, criterionId],
     ).rows[0];
     if (alreadyDeterministic) return { skip: 'already_caught_deterministically' };
+
+    // Not answerable on this channel. Returning `skip` here means the browser
+    // never calls the judge at all — the criterion comes back 'skipped', which
+    // the existing runner already keeps distinct from a pass and from a judge
+    // that never answered. Nothing is sent to a model to be guessed at.
+    const chan = channelOf(channelRowOf(db, convoId));
+    const why = notApplicableFor(chan.modality)[criterionId];
+    if (why) {
+      return {
+        skip: why === 'channel' ? 'not_applicable_on_channel' : 'join_not_checked_on_channel',
+        skipDetail: skipReason(why, chan.channel),
+        channel: chan.channel,
+      };
+    }
 
     const turns = db.query(
       'select * from transcript_turns where conversation_id = $1 order by turn_index',

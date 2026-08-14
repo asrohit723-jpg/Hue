@@ -210,6 +210,123 @@ function claimsRequest(
 }
 
 // ---------------------------------------------------------------------------
+// Channel
+//
+// The connection returns a `callType` and a `channelId` on every row and this
+// app used to throw both away, so every conversation became "a call" — which
+// is how a WEB conversation ended up with an email address in caller_phone,
+// rendered under a heading that says phone number.
+//
+// Hue never filtered by channel. The `type=CALL` filter lives in the
+// connection's own action definition, server-side, and there is no parameter
+// to widen it (see docs/platform-ask-text-channels.md). So this does not
+// "remove a filter" — it stops ASSUMING voice, and records what it is told.
+// The day the connection returns WHATSAPP or CHAT rows, they land correctly
+// with no change here.
+// ---------------------------------------------------------------------------
+
+/** What the platform calls each channel, mapped to how it must be graded. */
+const CHANNEL_MODALITY: Record<string, string> = {
+  PHONE: 'voice',
+  // Not a typo: WEB is the browser web-call WIDGET — speech through a browser,
+  // not a text chat. The platform's own schema says so, and its records carry
+  // recordingFileId and speech-shaped turns. It grades exactly like PHONE.
+  WEB: 'voice',
+  WHATSAPP: 'text',
+  CHAT: 'text',
+  EMAIL: 'text',
+};
+
+/**
+ * What the identity field actually holds on each channel.
+ *
+ * `record.phone` is polymorphic: a telephone number on PHONE, an email address
+ * on WEB. Storing which it is means a screen can label it truthfully instead of
+ * calling an email a phone number.
+ */
+function identityKindOf(channel: string, identity: string): string {
+  if (identity.includes('@')) return 'email';
+  if (/^\+?\d[\d\s-]{5,}$/.test(identity)) return 'phone';
+  return CHANNEL_MODALITY[channel] === 'text' ? 'handle' : 'phone';
+}
+
+function channelOfRecord(record: any): { channel: string; channelId: number; modality: string } {
+  const channel = String(record?.callType ?? '').trim().toUpperCase() || 'PHONE';
+  return {
+    channel,
+    channelId: Number(record?.channelId) || 0,
+    // An unknown channel grades as TEXT, not voice. Voice-only checks would
+    // otherwise run on something that is not a call, and this app's rule is
+    // that an unknown is never quietly treated as the permissive case.
+    modality: CHANNEL_MODALITY[channel] ?? 'text',
+  };
+}
+
+/**
+ * THE ONLY WRITER of conversation_channels, called from upsertLiveCall alone.
+ *
+ * Same discipline as writeCallGrade: a deterministic id and select-then-write,
+ * because this database has no unique index anywhere.
+ */
+function writeConversationChannel(
+  db: any,
+  convoId: string,
+  record: any,
+  identity: string,
+) {
+  const { channel, channelId, modality } = channelOfRecord(record);
+  const id = `CH-${convoId}`;
+  const taggedAt = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const values = [channel, channelId, modality, identityKindOf(channel, identity), taggedAt];
+
+  const existing = db.query('select id from conversation_channels where id = $1 limit 1', [id])
+    .rows[0];
+  if (existing) {
+    db.query(
+      `update conversation_channels
+          set channel=$2, channel_id=$3, modality=$4, identity_kind=$5, tagged_at=$6,
+              schema_version=1
+        where id=$1`,
+      [id, ...values],
+    );
+  } else {
+    db.query(
+      `insert into conversation_channels
+         (id, conversation_id, channel, channel_id, modality, identity_kind, tagged_at, schema_version)
+       values ($1,$2,$3,$4,$5,$6,$7,1)`,
+      [id, convoId, ...values],
+    );
+  }
+  return { channel, modality };
+}
+
+/**
+ * The written service-request number, for text channels. NOT WIRED YET.
+ *
+ * Voice keeps `spokenSrNumber` above, unchanged. This is the text counterpart:
+ * on WhatsApp or chat the number is typed rather than spoken, so it arrives as
+ * "SR 210412", "SR-210412", "#210412" or "Service Request ID: 210412" instead
+ * of a run of digits read aloud.
+ *
+ * It returns null deliberately, and must keep doing so until there is a real
+ * text conversation to test it against. A parser guessed at from an imagined
+ * format is worse than no parser: it would produce a confident WRONG join, and
+ * a wrong join is indistinguishable from the agent inventing a reference —
+ * exactly the failure Hue exists to catch. With null, a text conversation gets
+ * no claimed number, its join is recorded as `not_checked`, and every check
+ * that reads the CMMS record is marked not-applicable rather than failed.
+ *
+ * To wire it: implement the label-first match below, prefer agent turns (a
+ * number the CALLER types refers to a request that already existed), and
+ * remove the `not_checked` branch in gradeConversation.
+ */
+function writtenSrNumber(
+  _turns: Array<{ performer: string; message: string }>,
+): string | null {
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Storage. Idempotent on call id — a replay replaces turns, never duplicates.
 // ---------------------------------------------------------------------------
 
@@ -227,7 +344,11 @@ function upsertLiveCall(
   // screen knows it may re-read the transcript from the connection.
   const id = existing?.id ?? `L-${callLogId}`;
 
-  const srNumber = spokenSrNumber(turns);
+  // Channel decides how the reference is read. Voice keeps the spoken parser
+  // exactly as it was; text has no parser yet and therefore claims no number,
+  // which downstream becomes an honest "not checked" join rather than a guess.
+  const { modality } = channelOfRecord(record);
+  const srNumber = modality === 'voice' ? spokenSrNumber(turns) : writtenSrNumber(turns);
   const startMs = Number(record?.startTime ?? record?.createdAt ?? 0);
   const endMs = Number(record?.endTime ?? 0);
   const durationSec = endMs > startMs ? Math.round((endMs - startMs) / 1000) : 0;
@@ -285,6 +406,10 @@ function upsertLiveCall(
       [`${id}-T${i}`, id, i, t.performer, t.message, t.at],
     );
   });
+
+  // Tagged AFTER the conversation row exists, so a channel row never points at
+  // a conversation that is not there.
+  writeConversationChannel(db, id, record, callerPhone);
 
   return { id, replaced: Boolean(existing), srNumber };
 }
@@ -588,6 +713,66 @@ server.addHandler({
     } finally {
       releaseIngest(db, by);
     }
+  },
+});
+
+server.addHandler({
+  name: 'backfillChannels',
+  description:
+    'Tag conversations stored before channels were recorded. One list-call-logs page carries callType and channelId for every stored call, so this is a single fetch rather than one per conversation. Idempotent — re-running rewrites the same rows.',
+  parameters: {
+    pageSize: { description: 'Rows per page, max 100', type: 'number' },
+    maxPages: { description: 'Pages to walk', type: 'number' },
+  },
+  execute: async (args) => {
+    const db = connect();
+    const pageSize = Math.min(Math.max(Number(args.pageSize) || 100, 1), 100);
+    const maxPages = Math.min(Math.max(Number(args.maxPages) || 3, 1), 20);
+
+    const tagged: Array<{ id: string; channel: string; modality: string }> = [];
+    const seen = new Set<string>();
+
+    for (let page = 1; page <= maxPages; page++) {
+      const rows = listOf(await callLogs('list-call-logs', { page, pageSize }));
+      if (!rows.length) break;
+
+      for (const row of rows) {
+        const callLogId = String(row?.id ?? '').trim();
+        if (!callLogId || seen.has(callLogId)) continue;
+        seen.add(callLogId);
+
+        const convo = db.query('select id, caller_phone from conversations where call_id = $1 limit 1', [
+          callLogId,
+        ]).rows[0];
+        // Only tags what is already stored. This is a backfill, not an ingest.
+        if (!convo) continue;
+
+        const res = writeConversationChannel(
+          db,
+          String(convo.id),
+          row,
+          String(convo.caller_phone ?? ''),
+        );
+        tagged.push({ id: String(convo.id), channel: res.channel, modality: res.modality });
+      }
+    }
+
+    const untagged = Number(
+      db.query(
+        `select count(*) as n from conversations c
+          where c.id <> '__seed__'
+            and not exists (select 1 from conversation_channels g
+                             where g.conversation_id = c.id and g.id <> '__seed__')`,
+      ).rows[0]?.n ?? 0,
+    );
+
+    return {
+      tagged: tagged.length,
+      details: tagged,
+      // Seeded demo calls (C-*) are not on the connection, so they are never
+      // listed here. They read as PHONE/voice by default, which is what they are.
+      stillUntagged: untagged,
+    };
   },
 });
 

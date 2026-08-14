@@ -1,4 +1,5 @@
 import { createVibe } from '@facilio/vibe-sdk';
+import type { Channel, NotApplicable } from './channel';
 import type { GradingState } from './grading';
 import type {
   Conversation,
@@ -100,6 +101,8 @@ export interface ConversationRow {
   snippet?: string | null;
   /** Where this call is in grading, derived server-side. */
   grading?: GradingState;
+  /** How the conversation arrived, derived server-side from its channel row. */
+  channel?: Channel;
 }
 
 export interface DeviationRow {
@@ -208,6 +211,12 @@ export type ConversationView = Conversation & {
    */
   grading: GradingState | null;
   /**
+   * How the conversation arrived — phone, web call, WhatsApp, chat, email —
+   * and whether it can be graded as speech. Null only for rows that predate
+   * channel tagging, which are all voice.
+   */
+  channel: Channel | null;
+  /**
    * The reference the agent read back to the caller. Distinct from
    * `srRecordId`, which is the record the join actually resolved — when the
    * agent invents a number, this is set and that one is not.
@@ -274,6 +283,7 @@ export function toConversation(
     // still identified by the number that rang in rather than "Unknown caller".
     callerLabel: r.caller_name || r.caller_phone || 'Unknown caller',
     grading: r.grading ?? null,
+    channel: r.channel ?? null,
   };
 }
 
@@ -372,6 +382,13 @@ export const api = {
     grade: CallGrade | null;
     /** Where the call is in grading. Present even when there is no grade. */
     grading: GradingState | null;
+    /** How the conversation arrived. */
+    channel: Channel | null;
+    /**
+     * Criteria that cannot be answered on this conversation, with the reason.
+     * Distinct from passed and from "the judge never answered".
+     */
+    notApplicable: NotApplicable[];
   }> => {
     const res = await call<{
       conversation: ConversationRow;
@@ -385,6 +402,8 @@ export const api = {
       satisfaction?: string | null;
       grade?: CallGrade | null;
       grading?: GradingState | null;
+      channel?: Channel | null;
+      notApplicable?: NotApplicable[];
     }>('governance', 'getConversation', { id });
     return {
       transcriptSource: res.transcriptSource ?? 'stored',
@@ -397,6 +416,8 @@ export const api = {
       cmmsRecord: res.cmmsRecord,
       grade: res.grade ?? null,
       grading: res.grading ?? null,
+      channel: res.channel ?? null,
+      notApplicable: res.notApplicable ?? [],
     };
   },
 

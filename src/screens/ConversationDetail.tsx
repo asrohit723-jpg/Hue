@@ -14,6 +14,14 @@ import { WIRED_CRITERIA, layerOf } from '../lib/criteria';
 
 import { avatarColor, clock, duration, evalTone, initials, label, sentimentTone } from '../lib/tone';
 import { gradingDetail, gradingLabel, gradingTone, inFlight } from '../lib/grading';
+import {
+  channelLabel,
+  channelTone,
+  identityLabel,
+  skipHeading,
+  type Channel,
+  type NotApplicable,
+} from '../lib/channel';
 import { page } from '../lib/layout';
 
 /**
@@ -56,6 +64,9 @@ interface Loaded {
   satisfaction: string | null;
   /** Where the call is in grading. Present even when there is no grade yet. */
   grading: import('../lib/vibe').ConversationView['grading'];
+  /** How the conversation arrived, and what that rules out checking on it. */
+  channel: Channel | null;
+  notApplicable: NotApplicable[];
 }
 
 type QualityTab = 'score' | 'eval' | 'sentiment';
@@ -299,7 +310,10 @@ export function ConversationDetail({
       // stored grade keeps an unreachable judge distinct from a passing one.
       setGrading('call analysis');
       const an = await runCallAnalysis(id, {
-        graded: runs.map((r) => r.criterionId),
+        // Only what was actually ATTEMPTED. A criterion skipped because this
+        // channel cannot answer it was never graded, and recording it as graded
+        // would be the same fake pass in the stored grade.
+        graded: runs.filter((r) => r.verdict !== 'skipped').map((r) => r.criterionId),
         unavailable: runs.filter((r) => r.verdict === 'unavailable').map((r) => r.criterionId),
       });
       if (an.ok && an.analysis) {
@@ -310,9 +324,10 @@ export function ConversationDetail({
       const failed = runs.filter((r) => r.verdict === 'fail').length;
       const retracted = runs.filter((r) => r.retracted).length;
       const unavailable = runs.filter((r) => r.verdict === 'unavailable').length;
+      const skipped = runs.filter((r) => r.verdict === 'skipped').length;
       setGradeSummary(
         [
-          `${runs.length - unavailable} of ${runs.length} criteria graded`,
+          `${runs.length - unavailable - skipped} of ${runs.length - skipped} criteria graded`,
           failed ? `${failed} failed` : 'none failed',
           retracted ? `${retracted} retracted` : null,
           an.ok
@@ -322,6 +337,8 @@ export function ConversationDetail({
             : 'analysis unavailable',
           // A judge that never answered is UNKNOWN, never a pass — say so.
           unavailable ? `${unavailable} could not be reached` : null,
+          // And a check this channel cannot answer is neither.
+          skipped ? `${skipped} not applicable on this channel` : null,
         ]
           .filter(Boolean)
           .join(' · '),
@@ -345,6 +362,9 @@ export function ConversationDetail({
   if (!data) return <BootSkeleton label="Loading call…" />;
 
   const { conversation: c, deviations, cmmsRecord } = data;
+  const channel = data.channel;
+  const notApplicable = data.notApplicable;
+  const cht = channelTone(channel);
   const ev = evalTone(c.evalStatus);
   // A run in this tab is the live truth; otherwise the polled state is.
   const gt = grading ? { bg: 'var(--blue-050)', fg: 'var(--blue-600)' } : gradingTone(data.grading);
@@ -410,11 +430,33 @@ export function ConversationDetail({
           {initials(c.caller.name) !== '?' ? initials(c.caller.name) : '☎'}
         </span>
         <div style={{ minWidth: 0 }}>
-          <h1 style={{ fontSize: 22, lineHeight: '28px', fontWeight: 700, margin: 0 }}>{name}</h1>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 0 }}>
+            <h1 style={{ fontSize: 22, lineHeight: '28px', fontWeight: 700, margin: 0 }}>{name}</h1>
+            <span
+              style={{
+                fontSize: 11,
+                fontWeight: 600,
+                letterSpacing: '.03em',
+                textTransform: 'uppercase',
+                padding: '2px 8px',
+                borderRadius: 999,
+                background: cht.bg,
+                color: cht.fg,
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {channelLabel(channel)}
+            </span>
+          </div>
           <p style={{ margin: '4px 0 0', color: 'var(--ink-600)', fontSize: 13 }}>
             {c.site ?? 'Site not resolved'} · {clock(c.startedAt)} · {duration(c.durationSec)}
-            {/* The phone is the heading when there is no name — don't repeat it. */}
-            {c.caller.name && c.caller.phone ? ` · ${c.caller.phone}` : ''}
+            {/* The identity is the heading when there is no name — don't repeat
+                it. When it IS repeated, it is labelled for what it actually is:
+                a WEB conversation's handle is an email address, and calling it
+                a phone number was simply wrong. */}
+            {c.caller.name && c.caller.phone
+              ? ` · ${identityLabel(channel)} ${c.caller.phone}`
+              : ''}
             {gradeSummary && (
               <span style={{ color: 'var(--blue-600)', fontWeight: 500 }}> · {gradeSummary}</span>
             )}
@@ -706,6 +748,7 @@ export function ConversationDetail({
             onTab={setTab}
             analysis={analysis}
             analysisChannelSentiment={analysisChannelSentiment}
+            notApplicable={notApplicable}
           />
         </div>
       </div>
@@ -809,6 +852,7 @@ function QualityCard({
   onTab,
   analysis,
   analysisChannelSentiment,
+  notApplicable,
 }: {
   conversation: ConversationView;
   deviations: DeviationWithEvidence[];
@@ -816,6 +860,8 @@ function QualityCard({
   onTab: (t: QualityTab) => void;
   analysis: CallAnalysis | null;
   analysisChannelSentiment: string | null;
+  /** Criteria this channel cannot answer. Passed straight to the eval tab. */
+  notApplicable: NotApplicable[];
 }) {
   const ev = evalTone(c.evalStatus);
   const failedBy = new Map(deviations.map((d) => [d.criterionId, d]));
@@ -862,6 +908,7 @@ function QualityCard({
           notEvaluated={notEvaluated}
           evalFg={ev.fg}
           failedCount={deviations.length}
+          notApplicable={notApplicable}
         />
       )}
       {tab === 'sentiment' && (
@@ -1033,12 +1080,20 @@ function EvalTab({
   notEvaluated,
   evalFg,
   failedCount,
+  notApplicable,
 }: {
   failedBy: Map<string, DeviationWithEvidence>;
   notEvaluated: boolean;
   evalFg: string;
   failedCount: number;
+  /** Criteria that cannot be answered on this conversation, with the reason. */
+  notApplicable: NotApplicable[];
 }) {
+  // Without this, every criterion that is not failing renders a green tick —
+  // so a check that never ran on this channel would read as one the call
+  // passed. That is the fake pass this app refuses everywhere else, and on a
+  // text conversation it would be most of the list.
+  const skippedBy = new Map(notApplicable.map((n) => [n.criterionId, n]));
   const seed = (criteriaSeed as { criteria: Array<{ id: string; title: string; clauseRef: string }> })
     .criteria;
   const byId = new Map(seed.map((s) => [s.id, s]));
@@ -1063,7 +1118,8 @@ function EvalTab({
         <span style={{ marginLeft: 'auto', fontSize: 12, fontWeight: 600, color: evalFg }}>
           {notEvaluated
             ? 'awaiting evaluation'
-            : `${failedCount} of ${WIRED_CRITERIA.size} failed`}
+            : `${failedCount} of ${WIRED_CRITERIA.size - skippedBy.size} failed` +
+              (skippedBy.size ? ` · ${skippedBy.size} not applicable` : '')}
         </span>
       </div>
 
@@ -1074,7 +1130,9 @@ function EvalTab({
       ) : (
         Array.from(WIRED_CRITERIA).map((id) => {
           const layer = layerOf(id);
-          const failed = failedBy.get(id);
+          const skip = skippedBy.get(id);
+          // A skipped criterion is never also a failure — the check did not run.
+          const failed = skip ? undefined : failedBy.get(id);
           const meta = byId.get(id);
           return (
             <div
@@ -1092,8 +1150,12 @@ function EvalTab({
                   width: 16,
                   height: 16,
                   borderRadius: 999,
-                  background: failed ? 'var(--danger-500)' : 'var(--success-050)',
-                  color: failed ? '#fff' : 'var(--success-700)',
+                  background: skip
+                    ? 'var(--ink-050)'
+                    : failed
+                      ? 'var(--danger-500)'
+                      : 'var(--success-050)',
+                  color: skip ? 'var(--ink-500)' : failed ? '#fff' : 'var(--success-700)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -1103,21 +1165,41 @@ function EvalTab({
                   marginTop: 2,
                 }}
               >
-                {failed ? '✕' : '✓'}
+                {skip ? '–' : failed ? '✕' : '✓'}
               </span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div
                   style={{
                     fontSize: 13,
                     fontWeight: 500,
-                    color: failed ? 'var(--danger-700)' : 'var(--ink-900)',
+                    color: skip
+                      ? 'var(--ink-500)'
+                      : failed
+                        ? 'var(--danger-700)'
+                        : 'var(--ink-900)',
                   }}
                 >
                   {meta?.title ?? id}
                 </div>
                 <div style={{ fontSize: 12, color: 'var(--ink-600)', marginTop: 2 }}>
                   Clause {failed?.clauseRef ?? meta?.clauseRef ?? '—'} · {layer}
+                  {skip ? ` · ${skipHeading(skip.reason)}` : ''}
                 </div>
+                {skip && (
+                  <div
+                    style={{
+                      fontSize: 12,
+                      color: 'var(--ink-600)',
+                      background: 'var(--ink-050)',
+                      borderRadius: 6,
+                      padding: '7px 9px',
+                      marginTop: 6,
+                      lineHeight: '17px',
+                    }}
+                  >
+                    {skip.detail}
+                  </div>
+                )}
                 {failed && (
                   <div
                     style={{

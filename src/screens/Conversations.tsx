@@ -4,6 +4,7 @@ import { BootSkeleton } from './BootSkeleton';
 import { LoadError } from '../components/Chrome';
 import { avatarColor, clock, duration, evalTone, initials, label, sentimentTone } from '../lib/tone';
 import { gradingLabel, gradingTone, inFlight } from '../lib/grading';
+import { channelLabel, channelTone } from '../lib/channel';
 import { page } from '../lib/layout';
 
 /**
@@ -445,6 +446,7 @@ export function Conversations({
 function CallRow({ c, onOpen }: { c: ConversationView; onOpen: () => void }) {
   const ev = evalTone(c.evalStatus);
   const g = gradingTone(c.grading);
+  const ct = channelTone(c.channel);
   const sent = sentimentTone(c.sentiment);
   // Live call logs usually have no caller name, so this is the phone number.
   const name = c.callerLabel;
@@ -530,6 +532,24 @@ function CallRow({ c, onOpen }: { c: ConversationView; onOpen: () => void }) {
         <div style={{ minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
             <span style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{name}</span>
+            {/* How it arrived. Shown on every row, not only the unusual ones —
+                a channel that appears only sometimes reads as an exception
+                rather than as a fact about every conversation. */}
+            <span
+              style={{
+                flex: '0 0 auto',
+                fontSize: 10,
+                fontWeight: 600,
+                letterSpacing: '.03em',
+                textTransform: 'uppercase',
+                padding: '1px 6px',
+                borderRadius: 4,
+                background: ct.bg,
+                color: ct.fg,
+              }}
+            >
+              {channelLabel(c.channel)}
+            </span>
             <span title={c.site ?? ''} style={{ fontSize: 12, color: 'var(--ink-500)', ...truncate }}>
               {c.site ?? '—'}
             </span>
