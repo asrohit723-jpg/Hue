@@ -234,7 +234,8 @@
   .hue-nav,
   .hue-field,
   .hue-tab,
-  .hue-link {
+  .hue-link,
+  .hue-rail {
     transition-duration: 1ms;
   }
 
@@ -252,4 +253,11 @@
   .skq {
     animation: none;
   }
+}
+
+/* ---------- The collapsible sidebar ----------
+   Width is the only thing that animates; the contents swap instantly, because
+   a label fading out while the rail narrows reads as a rendering fault. */
+.hue-rail {
+  transition: width 160ms ease, flex-basis 160ms ease;
 }

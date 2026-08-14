@@ -62,6 +62,7 @@ function NavItem({
   iconBg,
   icon,
   trailing,
+  mini = false,
 }: {
   label: string;
   active: boolean;
@@ -69,6 +70,8 @@ function NavItem({
   iconBg: string;
   icon: React.ReactNode;
   trailing?: React.ReactNode;
+  /** Icon only. The label becomes the tooltip and the accessible name. */
+  mini?: boolean;
 }) {
   return (
     <div
@@ -80,11 +83,14 @@ function NavItem({
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') onClick();
       }}
+      title={mini ? label : undefined}
+      aria-label={mini ? label : undefined}
       style={{
         display: 'flex',
         alignItems: 'center',
+        justifyContent: mini ? 'center' : 'flex-start',
         gap: 10,
-        padding: '8px 10px',
+        padding: mini ? '8px 0' : '8px 10px',
         borderRadius: 6,
         cursor: 'pointer',
         fontWeight: 500,
@@ -105,13 +111,26 @@ function NavItem({
       >
         {icon}
       </span>
-      <span>{label}</span>
-      {trailing}
+      {/* The label and its trailing count are what the rail sheds; the tooltip
+          above carries the name so an icon is never unidentifiable. */}
+      {!mini && <span>{label}</span>}
+      {!mini && trailing}
     </div>
   );
 }
 
-function SectionLabel({ children, top = 6 }: { children: React.ReactNode; top?: number }) {
+function SectionLabel({
+  children,
+  top = 6,
+  mini = false,
+}: {
+  children: React.ReactNode;
+  top?: number;
+  mini?: boolean;
+}) {
+  // A section heading over icons nobody can read is noise. The rail keeps the
+  // grouping through spacing instead.
+  if (mini) return <div style={{ height: top + 6 }} />;
   return (
     <div
       style={{
@@ -135,6 +154,9 @@ export function Shell({ me }: { me: CurrentUser }) {
   const screen = route.screen;
   const callId = screen === 'convo' ? route.id : null;
   const deviationId = screen === 'int' ? route.id : null;
+  const mini = route.rail === 'mini';
+  const toggleRail = () =>
+    navigate({ screen, id: route.id, rail: mini ? undefined : 'mini' });
 
   const [query, setQuery] = useState('');
   const searchRef = useRef<HTMLInputElement | null>(null);
@@ -243,13 +265,15 @@ export function Shell({ me }: { me: CurrentUser }) {
     >
       {/* ---------------- SIDEBAR ---------------- */}
       <div
+        className="hue-rail"
         style={{
-          width: 236,
-          flex: '0 0 236px',
+          width: mini ? 64 : 236,
+          flex: `0 0 ${mini ? 64 : 236}px`,
           background: '#FFFFFF',
           borderRight: '1px solid var(--border-default)',
           display: 'flex',
           flexDirection: 'column',
+          overflow: 'hidden',
         }}
       >
         <div
@@ -259,49 +283,102 @@ export function Shell({ me }: { me: CurrentUser }) {
             display: 'flex',
             alignItems: 'center',
             gap: 12,
-            padding: '0 16px',
+            justifyContent: mini ? 'center' : 'flex-start',
+            padding: mini ? '0 12px' : '0 16px',
             borderBottom: '1px solid var(--border-default)',
           }}
         >
-          <div
+          {/* The mark needs 32px and the toggle 28px, which will not both fit a
+              64px rail. Collapsed, the row keeps the control and drops the
+              decoration. */}
+          {!mini && (
+            <div
+              style={{
+                width: 32,
+                height: 32,
+                flex: '0 0 32px',
+                borderRadius: 6,
+                background: 'var(--brand-indigo)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#fff',
+                fontWeight: 700,
+                fontSize: 14,
+              }}
+            >
+              A
+            </div>
+          )}
+          {!mini && (
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'center',
+                gap: 2,
+                minWidth: 0,
+              }}
+            >
+              <span style={{ fontWeight: 600, fontSize: 14, lineHeight: '17px' }}>
+                Atom Governance
+              </span>
+              <span style={{ fontSize: 12, color: 'var(--ink-500)', lineHeight: '14px' }}>
+                Helpdesk voice agent
+              </span>
+            </div>
+          )}
+
+          <button
+            className="hue-btn"
+            onClick={toggleRail}
+            aria-expanded={!mini}
+            aria-label={mini ? 'Expand the sidebar' : 'Collapse the sidebar'}
+            title={mini ? 'Expand the sidebar' : 'Collapse the sidebar'}
             style={{
-              width: 32,
-              height: 32,
-              flex: '0 0 32px',
+              marginLeft: mini ? 0 : 'auto',
+              width: 28,
+              height: 28,
+              flex: '0 0 28px',
               borderRadius: 6,
-              background: 'var(--brand-indigo)',
+              border: '1px solid var(--border-default)',
+              background: '#fff',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              color: '#fff',
-              fontWeight: 700,
-              fontSize: 14,
+              cursor: 'pointer',
+              color: 'var(--ink-600)',
             }}
           >
-            A
-          </div>
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              justifyContent: 'center',
-              gap: 2,
-              minWidth: 0,
-            }}
-          >
-            <span style={{ fontWeight: 600, fontSize: 14, lineHeight: '17px' }}>
-              Atom Governance
-            </span>
-            <span style={{ fontSize: 12, color: 'var(--ink-500)', lineHeight: '14px' }}>
-              Helpdesk voice agent
-            </span>
-          </div>
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.9"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              // Points the way it will move, so the icon says what happens next.
+              style={{ transform: mini ? 'rotate(180deg)' : undefined }}
+            >
+              <polyline points="15 18 9 12 15 6" />
+            </svg>
+          </button>
         </div>
 
-        <div style={{ padding: '14px 10px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <SectionLabel>Monitor</SectionLabel>
+        <div
+          style={{
+            padding: mini ? '14px 8px' : '14px 10px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+          }}
+        >
+          <SectionLabel mini={mini}>Monitor</SectionLabel>
 
           <NavItem
+            mini={mini}
             label="Overview"
             active={screen === 'overview'}
             onClick={() => setScreen('overview')}
@@ -317,6 +394,7 @@ export function Shell({ me }: { me: CurrentUser }) {
           />
 
           <NavItem
+            mini={mini}
             label="Conversations"
             active={screen === 'convos' || screen === 'convo'}
             onClick={() => setScreen('convos')}
@@ -341,6 +419,7 @@ export function Shell({ me }: { me: CurrentUser }) {
           />
 
           <NavItem
+            mini={mini}
             label="Interventions"
             active={screen === 'ints' || screen === 'int'}
             onClick={() => setScreen('ints')}
@@ -372,6 +451,7 @@ export function Shell({ me }: { me: CurrentUser }) {
           />
 
           <NavItem
+            mini={mini}
             label="Patterns"
             active={screen === 'patterns'}
             onClick={() => setScreen('patterns')}
@@ -384,9 +464,10 @@ export function Shell({ me }: { me: CurrentUser }) {
             }
           />
 
-          <SectionLabel top={14}>Govern</SectionLabel>
+          <SectionLabel top={14} mini={mini}>Govern</SectionLabel>
 
           <NavItem
+            mini={mini}
             label="Scope & evals"
             active={screen === 'scope'}
             onClick={() => setScreen('scope')}
@@ -409,10 +490,20 @@ export function Shell({ me }: { me: CurrentUser }) {
           style={{
             marginTop: 'auto',
             borderTop: '1px solid var(--border-default)',
-            padding: '12px 12px 14px',
+            padding: mini ? '12px 8px 14px' : '12px 12px 14px',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+          {/* Collapsed, the account stacks: the avatar identifies who is signed
+              in, the logout keeps its own tooltip. Both stay reachable. */}
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: mini ? 'column' : 'row',
+              alignItems: 'center',
+              gap: mini ? 8 : 10,
+              minWidth: 0,
+            }}
+          >
             <span
               style={{
                 width: 32,
@@ -427,42 +518,45 @@ export function Shell({ me }: { me: CurrentUser }) {
                 fontSize: 12,
                 fontWeight: 600,
               }}
+              title={mini ? `${me.user.name || me.user.username || me.user.email} · ${me.user.email}` : undefined}
             >
               {initials}
             </span>
-            <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.25, minWidth: 0 }}>
-              <span
-                style={{
-                  fontWeight: 600,
-                  fontSize: 13,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-                title={me.user.name || me.user.email}
-              >
-                {me.user.name || me.user.username || me.user.email}
-              </span>
-              <span
-                style={{
-                  fontSize: 11,
-                  color: 'var(--ink-500)',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-                title={me.user.email}
-              >
-                {me.user.email}
-              </span>
-            </div>
+            {!mini && (
+              <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.25, minWidth: 0 }}>
+                <span
+                  style={{
+                    fontWeight: 600,
+                    fontSize: 13,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                  title={me.user.name || me.user.email}
+                >
+                  {me.user.name || me.user.username || me.user.email}
+                </span>
+                <span
+                  style={{
+                    fontSize: 11,
+                    color: 'var(--ink-500)',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                  title={me.user.email}
+                >
+                  {me.user.email}
+                </span>
+              </div>
+            )}
             <button
               className="hue-btn"
               onClick={logout}
               title="Sign out"
               aria-label="Sign out"
               style={{
-                marginLeft: 'auto',
+                marginLeft: mini ? 0 : 'auto',
                 width: 30,
                 height: 30,
                 flex: '0 0 30px',

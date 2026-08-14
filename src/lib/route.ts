@@ -28,6 +28,16 @@ export interface Route {
   screen: ScreenId;
   /** The open record on a detail screen. Null everywhere else. */
   id: string | null;
+  /**
+   * Whether the sidebar is collapsed to an icon rail.
+   *
+   * In the URL rather than in storage: it then survives a reload for free and
+   * cannot drift out of step with what is on screen. It also rides along when
+   * you move between screens, which is the behaviour a collapsed rail needs —
+   * collapsing on one screen and finding it expanded on the next would read as
+   * the toggle not working.
+   */
+  rail?: 'mini';
 }
 
 /** The URL segment for each screen. Detail screens append the record id. */
@@ -58,22 +68,29 @@ export const DEFAULT_ROUTE: Route = { screen: 'overview', id: null };
  * somewhere real.
  */
 export function parseHash(hash: string): Route {
-  const parts = hash.replace(/^#\/?/, '').split('/').filter(Boolean);
-  if (!parts.length) return DEFAULT_ROUTE;
+  const [path, queryPart] = hash.replace(/^#\/?/, '').split('?');
+  // Anything but the one value it understands is expanded — a typo in a pasted
+  // link should not leave someone with a sidebar they cannot read.
+  const rail = /(^|&)rail=mini(&|$)/.test(queryPart ?? '') ? ('mini' as const) : undefined;
+
+  const parts = path.split('/').filter(Boolean);
+  if (!parts.length) return { ...DEFAULT_ROUTE, rail };
 
   const entry = SCREEN_OF[parts[0]];
-  if (!entry) return DEFAULT_ROUTE;
+  if (!entry) return { ...DEFAULT_ROUTE, rail };
 
   // A detail segment with no id is the list — `#/calls/` is the call list, not
   // a broken detail screen with nothing to show.
   const id = parts[1] ? decodeURIComponent(parts[1]) : null;
-  return { screen: id ? entry.detail : entry.list, id };
+  return { screen: id ? entry.detail : entry.list, id, rail };
 }
 
 export function formatHash(route: Route): string {
   const seg = SEGMENT[route.screen];
   const isDetail = route.screen === 'convo' || route.screen === 'int';
-  return isDetail && route.id ? `#/${seg}/${encodeURIComponent(route.id)}` : `#/${seg}`;
+  const path =
+    isDetail && route.id ? `#/${seg}/${encodeURIComponent(route.id)}` : `#/${seg}`;
+  return route.rail === 'mini' ? `${path}?rail=mini` : path;
 }
 
 /**
@@ -98,7 +115,13 @@ export function useHashRoute(): [Route, (next: Route) => void] {
     return () => window.removeEventListener('hashchange', onChange);
   }, []);
 
+  /**
+   * `rail` is CARRIED unless the caller sets it, so every existing
+   * navigate({screen, id}) call keeps the sidebar as the user left it without
+   * having to know the rail exists.
+   */
   const navigate = (next: Route) => {
+    if (next.rail === undefined) next = { ...next, rail: route.rail };
     const hash = formatHash(next);
     if (hash === window.location.hash) return;
     // Assignment (not pushState) so the browser records the entry AND fires
