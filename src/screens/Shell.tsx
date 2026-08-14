@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api, logout, type CurrentUser } from '../lib/vibe';
 import { HEADER_H } from '../lib/layout';
 import { useHashRoute, type ScreenId } from '../lib/route';
+import { Logo } from '../components/Logo';
 import { Overview } from './Overview';
 import { Conversations } from './Conversations';
 import { ConversationDetail } from './ConversationDetail';
@@ -150,13 +151,14 @@ function SectionLabel({
 export function Shell({ me }: { me: CurrentUser }) {
   // The screen and the open record live in the URL, so a reload comes back to
   // where you were and a link to a call is a link to that call.
-  const [route, navigate] = useHashRoute();
+  const [route, navigate, setRail] = useHashRoute();
   const screen = route.screen;
   const callId = screen === 'convo' ? route.id : null;
   const deviationId = screen === 'int' ? route.id : null;
   const mini = route.rail === 'mini';
-  const toggleRail = () =>
-    navigate({ screen, id: route.id, rail: mini ? undefined : 'mini' });
+  // Reads the current state and asks for the other one — a toggle, rather than
+  // a request that navigate could reinterpret.
+  const toggleRail = () => setRail(!mini);
 
   const [query, setQuery] = useState('');
   const searchRef = useRef<HTMLInputElement | null>(null);
@@ -291,24 +293,29 @@ export function Shell({ me }: { me: CurrentUser }) {
           {/* The mark needs 32px and the toggle 28px, which will not both fit a
               64px rail. Collapsed, the row keeps the control and drops the
               decoration. */}
-          {!mini && (
-            <div
+          {/* Collapsed, the mark IS the control: a 24px logo and a 28px button
+              will not both fit 40px of usable rail, and dropping the logo would
+              leave the app unidentifiable at exactly the width where a mark
+              matters most. So it expands, and says so. */}
+          {mini ? (
+            <button
+              className="hue-btn"
+              onClick={toggleRail}
+              aria-expanded={false}
+              aria-label="Expand the sidebar"
+              title="Hue · expand the sidebar"
               style={{
-                width: 32,
-                height: 32,
-                flex: '0 0 32px',
-                borderRadius: 6,
-                background: 'var(--brand-indigo)',
+                border: 'none',
+                background: 'transparent',
+                padding: 0,
+                cursor: 'pointer',
                 display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: '#fff',
-                fontWeight: 700,
-                fontSize: 14,
               }}
             >
-              A
-            </div>
+              <Logo size={30} />
+            </button>
+          ) : (
+            <Logo size={30} />
           )}
           {!mini && (
             <div
@@ -320,23 +327,22 @@ export function Shell({ me }: { me: CurrentUser }) {
                 minWidth: 0,
               }}
             >
-              <span style={{ fontWeight: 600, fontSize: 14, lineHeight: '17px' }}>
-                Atom Governance
-              </span>
+              <span style={{ fontWeight: 600, fontSize: 15, lineHeight: '18px' }}>Hue</span>
               <span style={{ fontSize: 12, color: 'var(--ink-500)', lineHeight: '14px' }}>
-                Helpdesk voice agent
+                Helpdesk governance
               </span>
             </div>
           )}
 
+          {!mini && (
           <button
             className="hue-btn"
             onClick={toggleRail}
-            aria-expanded={!mini}
-            aria-label={mini ? 'Expand the sidebar' : 'Collapse the sidebar'}
-            title={mini ? 'Expand the sidebar' : 'Collapse the sidebar'}
+            aria-expanded
+            aria-label="Collapse the sidebar"
+            title="Collapse the sidebar"
             style={{
-              marginLeft: mini ? 0 : 'auto',
+              marginLeft: 'auto',
               width: 28,
               height: 28,
               flex: '0 0 28px',
@@ -359,12 +365,11 @@ export function Shell({ me }: { me: CurrentUser }) {
               strokeWidth="1.9"
               strokeLinecap="round"
               strokeLinejoin="round"
-              // Points the way it will move, so the icon says what happens next.
-              style={{ transform: mini ? 'rotate(180deg)' : undefined }}
             >
               <polyline points="15 18 9 12 15 6" />
             </svg>
           </button>
+          )}
         </div>
 
         <div

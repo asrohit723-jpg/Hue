@@ -4,6 +4,7 @@ import { api, type DeviationWithEvidence, type OverviewMetrics } from '../lib/vi
 import { BootSkeleton } from './BootSkeleton';
 import { ErrorState } from './ErrorState';
 import { FirstRun } from './FirstRun';
+import { FilterBar, FilterSelect } from '../components/Filters';
 import { page } from '../lib/layout';
 
 /**
@@ -212,9 +213,7 @@ export function Overview({
   const [nonce, setNonce] = useState(0);
 
   const [range, setRange] = useState<RangeKey>('Today');
-  const [rangeOpen, setRangeOpen] = useState(false);
   const [siteSel, setSiteSel] = useState<string[]>([]);
-  const [siteOpen, setSiteOpen] = useState(false);
   const [exported, setExported] = useState(false);
 
   useEffect(() => {
@@ -516,110 +515,33 @@ export function Overview({
           </p>
         </div>
 
-        <div style={{ position: 'relative', marginLeft: 'auto' }}>
-          <PillButton onClick={() => setRangeOpen((o) => !o)} chevronUp={rangeOpen}>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="3" y="4" width="18" height="18" rx="2" />
-              <path d="M3 10h18" />
-              <path d="M8 2v4" />
-              <path d="M16 2v4" />
-            </svg>
-            {range}
-          </PillButton>
-          {rangeOpen && (
-            <Menu width={180} align="right">
-              {RANGE_KEYS.map((k) => (
-                <MenuRow
-                  key={k}
-                  active={k === range}
-                  onClick={() => {
-                    setRange(k);
-                    setRangeOpen(false);
-                  }}
-                >
-                  {k}
-                  {k === range && (
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--blue-500)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="20 6 9 17 4 12" />
-                    </svg>
-                  )}
-                </MenuRow>
-              ))}
-            </Menu>
-          )}
-        </div>
-
-        <div style={{ position: 'relative' }}>
-          <PillButton onClick={() => setSiteOpen((o) => !o)} chevronUp={siteOpen}>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M1 6h22M5 12h14M9 18h6" />
-            </svg>
-            {v.siteLabel}
-          </PillButton>
-          {siteOpen && (
-            <Menu width={220} align="left">
-              {v.siteOptions.map((name) => {
-                const on = siteSel.includes(name);
-                return (
-                  <div
-                    key={name}
-                    onClick={() =>
-                      setSiteSel(on ? siteSel.filter((s) => s !== name) : [...siteSel, name])
-                    }
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 9,
-                      padding: '9px 10px',
-                      borderRadius: 6,
-                      cursor: 'pointer',
-                      fontSize: 13,
-                      color: 'var(--ink-900)',
-                    }}
-                  >
-                    <span
-                      style={{
-                        width: 16,
-                        height: 16,
-                        flex: '0 0 16px',
-                        borderRadius: 4,
-                        border: `1.5px solid ${on ? 'var(--blue-500)' : 'var(--border-default)'}`,
-                        background: on ? 'var(--blue-500)' : '#fff',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                      }}
-                    >
-                      {on && (
-                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                          <polyline points="20 6 9 17 4 12" />
-                        </svg>
-                      )}
-                    </span>
-                    {name}
-                  </div>
-                );
-              })}
-              <div style={{ borderTop: '1px solid var(--border-default)', marginTop: 4, paddingTop: 6 }}>
-                <div
-                  onClick={() => {
-                    setSiteSel([]);
-                    setSiteOpen(false);
-                  }}
-                  style={{
-                    padding: '7px 10px',
-                    borderRadius: 6,
-                    cursor: 'pointer',
-                    fontSize: 12,
-                    color: 'var(--blue-500)',
-                    fontWeight: 500,
-                  }}
-                >
-                  Clear, show all sites
-                </div>
-              </div>
-            </Menu>
-          )}
+        {/* The same filter control every other screen uses. Site stays
+            MULTI-select — it always was, and unifying by flattening it would
+            have removed a working filter to make the code tidier. */}
+        <div style={{ marginLeft: 'auto' }}>
+          <FilterBar
+            dirty={range !== 'Today' || siteSel.length > 0}
+            onClear={() => {
+              setRange('Today');
+              setSiteSel([]);
+            }}
+          >
+            <FilterSelect
+              label="Range"
+              allLabel={range}
+              options={RANGE_KEYS.map((k) => ({ value: k, label: k }))}
+              values={[range]}
+              onChange={(next) => setRange((next[0] as RangeKey) ?? range)}
+            />
+            <FilterSelect
+              label="Site"
+              allLabel="All sites"
+              multi
+              options={v.siteOptions.map((name) => ({ value: name, label: name }))}
+              values={siteSel}
+              onChange={setSiteSel}
+            />
+          </FilterBar>
         </div>
 
         <div style={{ display: 'flex', gap: 8 }}>
@@ -1006,110 +928,6 @@ function Kpi({ label, value, sub }: { label: string; value: string; sub: string 
   );
 }
 
-function PillButton({
-  onClick,
-  chevronUp,
-  children,
-}: {
-  onClick: () => void;
-  chevronUp: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <button className="hue-btn"
-      onClick={onClick}
-      style={{
-        height: 36,
-        padding: '0 12px',
-        borderRadius: 999,
-        border: '1px solid var(--border-default)',
-        background: '#fff',
-        fontWeight: 500,
-        fontSize: 13,
-        cursor: 'pointer',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 7,
-        color: 'var(--ink-900)',
-      }}
-    >
-      {children}
-      <svg
-        width="13"
-        height="13"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        style={chevronUp ? { transform: 'rotate(180deg)' } : undefined}
-      >
-        <polyline points="6 9 12 15 18 9" />
-      </svg>
-    </button>
-  );
-}
-
-function Menu({
-  width,
-  align,
-  children,
-}: {
-  width: number;
-  align: 'left' | 'right';
-  children: React.ReactNode;
-}) {
-  return (
-    <div
-      style={{
-        position: 'absolute',
-        top: 42,
-        [align]: 0,
-        width,
-        background: '#fff',
-        border: '1px solid var(--border-default)',
-        borderRadius: 8,
-        boxShadow: '0 8px 24px rgba(20,30,50,0.12)',
-        padding: 6,
-        zIndex: 20,
-      }}
-    >
-      {children}
-    </div>
-  );
-}
-
-function MenuRow({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <div
-      onClick={onClick}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        padding: '9px 10px',
-        borderRadius: 6,
-        cursor: 'pointer',
-        fontSize: 13,
-        color: 'var(--ink-900)',
-        background: active ? 'var(--blue-025)' : 'transparent',
-      }}
-    >
-      {children}
-    </div>
-  );
-}
-
-/** A recent-intervention row, with the design's hover tint. */
 function Row({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
   return (
     <div

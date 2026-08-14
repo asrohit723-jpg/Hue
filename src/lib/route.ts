@@ -99,7 +99,11 @@ export function formatHash(route: Route): string {
  * `hashchange` covers the browser's own back and forward buttons, so they work
  * without anything else being written for them.
  */
-export function useHashRoute(): [Route, (next: Route) => void] {
+export function useHashRoute(): readonly [
+  Route,
+  (next: Route) => void,
+  (collapsed: boolean) => void,
+] {
   const [route, setRoute] = useState<Route>(() => parseHash(window.location.hash));
 
   useEffect(() => {
@@ -115,13 +119,7 @@ export function useHashRoute(): [Route, (next: Route) => void] {
     return () => window.removeEventListener('hashchange', onChange);
   }, []);
 
-  /**
-   * `rail` is CARRIED unless the caller sets it, so every existing
-   * navigate({screen, id}) call keeps the sidebar as the user left it without
-   * having to know the rail exists.
-   */
-  const navigate = (next: Route) => {
-    if (next.rail === undefined) next = { ...next, rail: route.rail };
+  const go = (next: Route) => {
     const hash = formatHash(next);
     if (hash === window.location.hash) return;
     // Assignment (not pushState) so the browser records the entry AND fires
@@ -129,5 +127,23 @@ export function useHashRoute(): [Route, (next: Route) => void] {
     window.location.hash = hash;
   };
 
-  return [route, navigate];
+  /**
+   * `rail` is CARRIED here, so every existing navigate({screen, id}) keeps the
+   * sidebar as the user left it without having to know the rail exists.
+   */
+  const navigate = (next: Route) => go({ ...next, rail: next.rail ?? route.rail });
+
+  /**
+   * Collapse or expand, said explicitly.
+   *
+   * This does NOT go through navigate, and that is the whole point. navigate
+   * reads an absent rail as "carry the current one", so expressing "expand" as
+   * `rail: undefined` asked for expanded and got mini back — an identical hash,
+   * which `go` then discards as a no-op. The toggle collapsed and could never
+   * un-collapse. One value cannot mean both "unspecified" and "expanded".
+   */
+  const setRail = (collapsed: boolean) =>
+    go({ screen: route.screen, id: route.id, rail: collapsed ? 'mini' : undefined });
+
+  return [route, navigate, setRail] as const;
 }

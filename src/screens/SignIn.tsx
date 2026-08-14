@@ -70,7 +70,7 @@ export function SignIn({ onSignIn, error }: { onSignIn: () => void; error?: stri
                 A
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.15 }}>
-                <span style={{ fontWeight: 600, fontSize: 15 }}>Atom Governance</span>
+                <span style={{ fontWeight: 600, fontSize: 15 }}>Hue</span>
                 <span style={{ fontSize: 12, color: 'var(--ink-500)' }}>Helpdesk voice agent</span>
               </div>
             </div>

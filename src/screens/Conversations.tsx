@@ -9,6 +9,7 @@ import { avatarColor, clock, duration, evalTone, initials, label, sentimentTone 
 import { inFlight } from '../lib/grading';
 import { runCallAnalysis } from '../lib/judges';
 import { channelLabel, channelTone } from '../lib/channel';
+import { FilterBar, FilterSelect } from '../components/Filters';
 import { page } from '../lib/layout';
 
 /**
@@ -320,66 +321,30 @@ export function Conversations({
             flexWrap: 'wrap',
           }}
         >
-          <select className="hue-field"
-            value={site}
-            onChange={(e) => setSite(e.target.value)}
-            style={{
-              height: 36,
-              width: 136,
-              border: '1px solid var(--border-default)',
-              borderRadius: 6,
-              padding: '0 30px 0 10px',
-              fontSize: 13,
-              backgroundColor: '#fff',
-              backgroundImage:
-                "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23283648' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E\")",
-              backgroundRepeat: 'no-repeat',
-              backgroundPosition: 'right 10px center',
-              appearance: 'none',
-              WebkitAppearance: 'none',
-              MozAppearance: 'none',
-              color: 'var(--ink-900)',
-              cursor: 'pointer',
-              outline: 'none',
-            }}
-          >
-            {sites.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
         </div>
       </div>
 
-      <div
-        style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '14px 0 0', flexWrap: 'wrap' }}
-      >
-        {FILTERS.map((f) => {
-          const on = filter === f;
-          return (
-            <button className="hue-btn"
-              key={f}
-              onClick={() => setFilter(f)}
-              style={{
-                height: 32,
-                fontSize: 12,
-                fontWeight: 500,
-                padding: '0 13px',
-                borderRadius: 999,
-                cursor: 'pointer',
-                border: `1px solid ${on ? 'var(--blue-500)' : 'var(--border-default)'}`,
-                background: on ? 'var(--blue-500)' : '#fff',
-                color: on ? '#fff' : 'var(--ink-700)',
-              }}
-            >
-              {f}
-            </button>
-          );
-        })}
-        <span style={{ marginLeft: 'auto', fontSize: 13, color: 'var(--ink-600)' }}>
-          {rows.length} of {items.length} {items.length === 1 ? 'call' : 'calls'}
-        </span>
+      {/* The one filter control, same as every other screen. */}
+      <div style={{ margin: '14px 0 0' }}>
+        <FilterBar
+          dirty={filter !== 'All calls' || site !== 'All sites'}
+          onClear={clearAll}
+        >
+          <FilterSelect
+            label="Result"
+            allLabel="All calls"
+            options={FILTERS.filter((f) => f !== 'All calls').map((f) => ({ value: f, label: f }))}
+            values={filter === 'All calls' ? [] : [filter]}
+            onChange={(next) => setFilter((next[0] as Filter) ?? 'All calls')}
+          />
+          <FilterSelect
+            label="Site"
+            allLabel="All sites"
+            options={sites.filter((x) => x !== 'All sites').map((x) => ({ value: x, label: x }))}
+            values={site === 'All sites' ? [] : [site]}
+            onChange={(next) => setSite(next[0] ?? 'All sites')}
+          />
+        </FilterBar>
       </div>
 
       {/* `scoring` is in the condition because the scorecards are still being

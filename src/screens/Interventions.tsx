@@ -4,6 +4,7 @@ import { BootSkeleton } from './BootSkeleton';
 import { LoadError } from '../components/Chrome';
 import { clock, label, rootCauseTone, severityTone } from '../lib/tone';
 import criteriaSeed from '../../evals/criteria.seed.json';
+import { FilterBar, FilterSelect } from '../components/Filters';
 import { page } from '../lib/layout';
 
 /**
@@ -217,62 +218,23 @@ export function Interventions({
         style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '16px 0 0', flexWrap: 'wrap' }}
       >
 
-        {selects.map((s) => {
-          const active = s.value !== s.dflt;
-          return (
-            <select className="hue-field"
-              key={s.key}
-              value={s.value}
-              onChange={(e) => s.set(e.target.value)}
-              aria-label={s.label}
-              style={{
-                height: 36,
-                width: 136,
-                border: `1px solid ${active ? 'var(--blue-500)' : 'var(--border-default)'}`,
-                borderRadius: 6,
-                padding: '0 30px 0 10px',
-                fontSize: 13,
-                backgroundColor: active ? 'var(--blue-025)' : '#fff',
-                backgroundImage:
-                  "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23283648' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E\")",
-                backgroundRepeat: 'no-repeat',
-                backgroundPosition: 'right 10px center',
-                appearance: 'none',
-                WebkitAppearance: 'none',
-                MozAppearance: 'none',
-                color: active ? 'var(--blue-600)' : 'var(--ink-700)',
-                fontWeight: active ? 600 : 400,
-                cursor: 'pointer',
-                outline: 'none',
-              }}
-            >
-              {s.options.map((o) => (
-                <option key={o} value={o}>
-                  {o.startsWith('All') || /[A-Z]/.test(o[0]) ? o : label(o)}
-                </option>
-              ))}
-            </select>
-          );
-        })}
-
-        {filtered && (
-          <button className="hue-btn"
-            onClick={clearFilters}
-            style={{
-              height: 36,
-              padding: '0 10px',
-              borderRadius: 6,
-              border: 'none',
-              background: 'transparent',
-              fontSize: 13,
-              fontWeight: 500,
-              cursor: 'pointer',
-              color: 'var(--blue-500)',
-            }}
-          >
-            Clear filters
-          </button>
-        )}
+        <FilterBar dirty={filtered} onClear={clearFilters}>
+          {selects.map((f) => (
+            <FilterSelect
+              key={f.key}
+              label={f.label}
+              allLabel={f.dflt}
+              options={f.options
+                .filter((o) => o !== f.dflt)
+                .map((o) => ({
+                  value: o,
+                  label: /[A-Z]/.test(o[0]) ? o : label(o),
+                }))}
+              values={f.value === f.dflt ? [] : [f.value]}
+              onChange={(next) => f.set(next[0] ?? f.dflt)}
+            />
+          ))}
+        </FilterBar>
 
         <span
           style={{
