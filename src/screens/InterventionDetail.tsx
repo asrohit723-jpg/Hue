@@ -72,6 +72,24 @@ interface CurrentClause {
   reason?: string;
 }
 
+/**
+ * The service request this call should have produced.
+ *
+ * Drafted by the server from the call record, the transcript and the LIVE CMMS
+ * site list — so the panel previews the same values the write will send, and
+ * `missing` names a detail that is genuinely absent rather than guessed.
+ */
+interface CmmsDraft {
+  subject: string;
+  description: string;
+  urgency: string;
+  siteId: number | null;
+  siteName: string;
+  siteNote: string;
+  fields: Array<{ label: string; value: string }>;
+  missing: string[];
+}
+
 interface CorrectionRecord {
   id: string;
   deviationId: string;
@@ -133,6 +151,11 @@ export function InterventionDetail({
   // The "before" of the diff: what the agent is told today about this clause.
   // Read from the scope of work, because its live prompt is not exposed.
   const [currentClause, setCurrentClause] = useState<CurrentClause | null>(null);
+  // The record this call should have produced, drafted server-side from the
+  // call and the live site list. Present whenever the plan is a create.
+  const [cmmsDraft, setCmmsDraft] = useState<CmmsDraft | null>(null);
+  // Whether an agent-side fix is the right instrument for this finding at all.
+  const [agentFix, setAgentFix] = useState<{ warranted: boolean; reason: string } | null>(null);
   const [sowNote, setSowNote] = useState<string | null>(null);
   // Auto-draft runs ONCE per deviation, not once per render and not on every
   // nonce bump — a screen that re-drafts on refresh burns two agent calls each
@@ -169,6 +192,8 @@ export function InterventionDetail({
         setCorr(correction.correction);
         setCmmsPlan((correction as any).cmmsPlan ?? null);
         setCurrentClause((correction as any).currentClause ?? null);
+        setCmmsDraft((correction as any).cmmsDraft ?? null);
+        setAgentFix((correction as any).agentFix ?? null);
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
       }
@@ -760,6 +785,7 @@ export function InterventionDetail({
           act={act}
           sowNote={sowNote}
           currentClause={currentClause}
+          agentFix={agentFix}
           onAnalyse={analyse}
           onApprove={approveSowFix}
           onVerify={() => run('verifyCorrection', { correctionId: corr?.id ?? `CO-${dev.id}` }, 'verify')}
@@ -770,6 +796,7 @@ export function InterventionDetail({
           corr={corr}
           rec={rec}
           plan={cmmsPlan}
+          draft={cmmsDraft}
           busy={act.busy}
           act={act}
           onWrite={() =>
@@ -917,6 +944,7 @@ function FixTheAgent({
   onAnalyse,
   sowNote,
   currentClause,
+  agentFix,
   onApprove,
   onVerify,
 }: {
@@ -929,6 +957,8 @@ function FixTheAgent({
   sowNote: string | null;
   /** The clause as it stands today — the left side of the diff. */
   currentClause: CurrentClause | null;
+  /** Whether a scope-of-work fix is the right instrument for this finding. */
+  agentFix: { warranted: boolean; reason: string } | null;
   onApprove: () => void;
   onVerify: () => void;
 }) {
@@ -992,6 +1022,43 @@ function FixTheAgent({
         <span style={{ fontSize: 12, fontWeight: 600, color: status.fg }}>{status.label}</span>
       </div>
 
+      {/* NOT EVERY FAILURE IS A RULE THAT WAS MISSING.
+          Where the call was simply cut, this panel used to draft a scope-of-work
+          amendment anyway, because the proposer is handed a finding and asked
+          for a fix — so it writes one, whatever the finding is. Saying plainly
+          that no amendment is warranted is the correct output here, and it
+          replaces the diff rather than sitting above it: a draft nobody should
+          approve does not belong on the screen at all. */}
+      {agentFix && !agentFix.warranted ? (
+        <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ fontWeight: 500, color: 'var(--ink-900)' }}>
+            No scope-of-work fix is warranted
+          </div>
+          <p
+            style={{
+              margin: 0,
+              fontSize: 13,
+              lineHeight: '20px',
+              color: 'var(--ink-700)',
+              textWrap: 'pretty',
+            }}
+          >
+            {agentFix.reason}
+          </p>
+          <div
+            style={{
+              fontSize: 12,
+              lineHeight: '18px',
+              color: 'var(--ink-600)',
+              borderTop: '1px solid var(--ink-100)',
+              paddingTop: 12,
+            }}
+          >
+            The fix for this call is in the record, not the rulebook — see{' '}
+            <b style={{ fontWeight: 600, color: 'var(--ink-900)' }}>Fix the record</b> below.
+          </div>
+        </div>
+      ) : (
       <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
         <div>
           <div style={{ fontWeight: 500, color: corr ? 'var(--ink-900)' : 'var(--ink-500)' }}>
@@ -1294,6 +1361,7 @@ function FixTheAgent({
           </div>
         )}
       </div>
+      )}
     </div>
   );
 }
@@ -1321,6 +1389,7 @@ function FixTheRecord({
   corr,
   rec,
   plan,
+  draft,
   busy,
   act,
   onWrite,
@@ -1330,6 +1399,8 @@ function FixTheRecord({
   rec: any;
   /** Decided by the server from the JOIN, not by the proposer. */
   plan: { verb: string; recordId: string | null; reason: string } | null;
+  /** The record this call should have produced, drafted from the call itself. */
+  draft: CmmsDraft | null;
   busy: string | null;
   /** So a failed write is visible HERE, next to the button that caused it. */
   act: ActionState;
@@ -1341,10 +1412,19 @@ function FixTheRecord({
   // wrong in the one direction that matters, proposing a create for a call that
   // already has a record.
   const verb = plan ? plan.verb : String(action?.verb ?? 'none');
-  const fields: Array<{ label: string; value: string }> = Array.isArray(action?.fields)
+  // The proposer's fields where it named any; otherwise the server's draft,
+  // which is what the write will actually send. The panel used to show "no
+  // fields drafted yet" for every finding the proposer routed to a prompt fix —
+  // including the calls with no service request at all, where a draft is
+  // exactly what is needed.
+  const proposed: Array<{ label: string; value: string }> = Array.isArray(action?.fields)
     ? action.fields
     : [];
+  const fields = proposed.length > 0 ? proposed : (draft?.fields ?? []);
   const hasAction = verb === 'create' || verb === 'update';
+  // A create that cannot run yet, and exactly which detail is missing. Named
+  // rather than left to a button that does nothing when pressed.
+  const blocked = verb === 'create' && draft ? draft.missing : [];
   const applied = corr?.state === 'applied' || corr?.state === 'verifying' || corr?.state === 'resolved';
 
   return (
@@ -1382,13 +1462,30 @@ function FixTheRecord({
       </div>
 
       <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 13 }}>
+        {/* The plan's own reason, which is the server's sentence about ground
+            truth — "No service request was raised for this call…" — rather than
+            the proposer's rationale, which on these findings is about the
+            prompt and says nothing about the record. */}
         <p style={{ margin: 0, fontSize: 13, lineHeight: '20px', color: 'var(--ink-700)', textWrap: 'pretty' }}>
-          {hasAction
-            ? corr?.rationale || 'The proposer drafted a write against the live CMMS.'
-            : dev.checkedSrId
-              ? `This call resolved to SR ${dev.checkedSrId}. Draft a correction to see what would be written to it.`
-              : 'The join found no service request for this call. Correcting the agent does not raise the missing request — draft a correction to see the write that would.'}
+          {verb === 'create'
+            ? plan?.reason || 'No service request was raised for this call.'
+            : hasAction
+              ? corr?.rationale || 'The proposer drafted a write against the live CMMS.'
+              : dev.checkedSrId
+                ? `This call resolved to SR ${dev.checkedSrId}. Draft a correction to see what would be written to it.`
+                : 'The join found no service request for this call. Correcting the agent does not raise the missing request — draft a correction to see the write that would.'}
         </p>
+
+        {/* Where the site came from, or why it is not there. The write refuses
+            to guess a building, so the reason it refused belongs next to the
+            draft rather than only in the error after a failed press. */}
+        {verb === 'create' && draft ? (
+          <div style={{ fontSize: 12, lineHeight: '18px', color: 'var(--ink-600)' }}>
+            {draft.siteId
+              ? `Site resolved to ${draft.siteName} — ${draft.siteNote}.`
+              : `Site unresolved: ${draft.siteNote}.`}
+          </div>
+        ) : null}
 
         <div style={{ border: '1px solid var(--border-default)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
           <div
@@ -1497,6 +1594,29 @@ function FixTheRecord({
           </div>
         ) : null}
 
+        {/* A create that cannot run, and the reason, BEFORE the press. The
+            write refuses to guess a site, so without this the only way to learn
+            what was missing was to press the button and read the failure. */}
+        {blocked.length > 0 && !applied ? (
+          <div
+            style={{
+              fontSize: 12,
+              lineHeight: '18px',
+              color: 'var(--warning-700)',
+              background: 'var(--warning-050)',
+              border: '1px solid var(--warning-500)',
+              borderRadius: 'var(--radius-sm)',
+              padding: '9px 11px',
+            }}
+          >
+            <b style={{ fontWeight: 600 }}>
+              Missing: {blocked.join(', ')}.
+            </b>{' '}
+            Everything else is drafted and ready. A service request cannot be filed without a
+            site — filing against a guessed building is worse than not filing yet.
+          </div>
+        ) : null}
+
         {/* ONE button, and the verb on it is the verb the server will run —
             both read the same join-derived plan, so it cannot offer to create a
             record while the server updates one. Safe to press twice: approve
@@ -1505,18 +1625,18 @@ function FixTheRecord({
           <button
             className="hue-btn"
             onClick={onWrite}
-            disabled={Boolean(busy) || applied}
+            disabled={Boolean(busy) || applied || blocked.length > 0}
             aria-busy={busy === 'approve'}
             title={plan?.reason}
             style={{
               height: 38,
               borderRadius: 'var(--radius-sm)',
-              border: `1px solid ${applied ? 'var(--border-default)' : 'var(--warning-500)'}`,
-              background: applied ? 'var(--ink-050)' : 'var(--warning-500)',
-              color: applied ? 'var(--ink-500)' : 'var(--surface-card)',
+              border: `1px solid ${applied || blocked.length ? 'var(--border-default)' : 'var(--warning-500)'}`,
+              background: applied || blocked.length ? 'var(--ink-050)' : 'var(--warning-500)',
+              color: applied || blocked.length ? 'var(--ink-500)' : 'var(--surface-card)',
               fontWeight: 600,
               fontSize: 13,
-              cursor: busy || applied ? 'not-allowed' : 'pointer',
+              cursor: busy || applied || blocked.length ? 'not-allowed' : 'pointer',
               display: 'inline-flex',
               alignItems: 'center',
               justifyContent: 'center',

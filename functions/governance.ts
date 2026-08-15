@@ -1126,6 +1126,68 @@ async function gradeConversation(convoId: string) {
       });
     }
 
+    // CR-LOG-01 — a fault was reported, the line went quiet, and nothing was
+    // logged.
+    //
+    // THE CASE THE OTHER CHECKS ALL MISS. The branch above needs the agent to
+    // have CLAIMED a request; here it never got that far. CR-ESC-04 below needs
+    // `status = 'dropped'`, and the channel marks a call that simply stopped as
+    // 'completed'. The semantic pass stands down too, reasonably — with the
+    // call cut during location gathering there is no logging behaviour left to
+    // read. So a caller reported a fault, nobody wrote it down, and every check
+    // had a good reason to say nothing.
+    //
+    // The signal is the SHAPE OF THE END: the last turn is the agent's. The
+    // agent asked, and the caller never answered — not a call that finished,
+    // a call that stopped. Read off the transcript, so it does not depend on a
+    // status field the channel fills in coarsely.
+    const lastTurn = turns[turns.length - 1];
+    const endedOnAgent = Boolean(lastTurn) && lastTurn.performer === 'agent';
+    const callerReported = turns.some(
+      (t: any) => t.performer === 'caller' && String(t.message ?? '').trim().length > 3,
+    );
+
+    if (applicable('CR-LOG-01') && !srClaimed && !matched && endedOnAgent && callerReported) {
+      // The caller's own turns, the agent's last question, and the join. What
+      // was reported, where it stopped, and that nothing reached the CMMS.
+      const callerTurns = turns.filter(
+        (t: any) => t.performer === 'caller' && String(t.message ?? '').trim(),
+      );
+      const evidence = [
+        ...callerTurns.map((t: any) => ({
+          at: t.at_offset,
+          who: 'caller',
+          quote: t.message,
+          isViolation: false,
+        })),
+        {
+          at: lastTurn.at_offset,
+          who: 'agent',
+          quote: `${lastTurn.message} — the call ends here. The caller never answered.`,
+          isViolation: true,
+        },
+        {
+          at: '',
+          who: 'CMMS',
+          quote: 'Searched the CMMS for a service request from this call: none found.',
+          isViolation: true,
+        },
+      ];
+
+      findings.push({
+        criterionId: 'CR-LOG-01',
+        clauseRef: 'S-2.1',
+        summary:
+          `The caller reported a fault and the call ended mid-question after ` +
+          `${convo.duration_sec ?? '?'} seconds, before a service request was raised. ` +
+          `No record of the reported issue exists in the CMMS, and the caller has no reference.`,
+        // Critical: an unlogged fault is the failure this app exists to catch,
+        // and it outranks anything about how the call was conducted.
+        severity: 'critical',
+        evidence,
+      });
+    }
+
     // CR-ESC-04 — a call that drops before confirmation must raise a callback
     // task. A drop is not a completed call, and the caller is left believing
     // nothing was recorded — which here is true.
@@ -1175,12 +1237,38 @@ async function gradeConversation(convoId: string) {
     );
 
     if (applicable('CR-CALL-01') && missing.length && callerSpoke) {
+      // Evidence, where there used to be an empty array and a screen that said
+      // "no turn-level evidence was recorded for this finding". The finding was
+      // always about what the caller did and did not get to say, so the turns
+      // ARE the evidence — what they reported, and where the exchange stopped.
+      const spoken = turns.filter(
+        (t: any) => String(t.message ?? '').trim() && t.performer !== 'system',
+      );
+      const evidence = [
+        ...spoken.slice(0, 4).map((t: any) => ({
+          at: t.at_offset,
+          who: t.performer,
+          quote: t.message,
+          isViolation: false,
+        })),
+        ...(endedOnAgent
+          ? [
+              {
+                at: lastTurn.at_offset,
+                who: 'agent',
+                quote: `${lastTurn.message} — the call ends here, with the ${missing.join(' and ')} still unconfirmed.`,
+                isViolation: true,
+              },
+            ]
+          : []),
+      ];
+
       findings.push({
         criterionId: 'CR-CALL-01',
         clauseRef: 'S-6.1',
         summary: `The agent did not confirm the caller's ${missing.join(', ')} on this call.`,
         severity: 'medium',
-        evidence: [],
+        evidence,
       });
     }
 
@@ -2787,6 +2875,187 @@ async function deviationContext(db: any, deviationId: string, memo?: (id: string
 
 
 /**
+ * Whether an agent-side fix is the right instrument for this finding.
+ *
+ * Not every failure is a rule the prompt got wrong, and the proposer cannot
+ * tell the difference — it is handed a finding and asked for a fix, so it
+ * writes one. On a call that was CUT, that produces a scope-of-work amendment
+ * about conduct nobody observed, for a call that ended because the line went
+ * quiet. The amendment drafted for L-2532 invented three Skyline sites to
+ * disambiguate between; the CMMS has one.
+ *
+ * So this is decided from the call, not from the draft: a call that stopped
+ * mid-exchange with nothing logged needs the RECORD raised, not the rulebook
+ * rewritten. Where the failure genuinely is a rule gap, nothing changes and
+ * the diff renders exactly as before.
+ */
+function agentFixFor(convo: any, turns: any[]): { warranted: boolean; reason: string } {
+  const last = turns[turns.length - 1];
+  const endedOnAgent = Boolean(last) && last.performer === 'agent';
+  const noRecord = !String(convo?.cmms_sr_id ?? '').trim();
+
+  if (endedOnAgent && noRecord) {
+    return {
+      warranted: false,
+      reason:
+        'This call ended mid-question — the agent asked, and the caller never answered. ' +
+        'Nothing here is a gap in the scope of work: the rules were not reached, the call ' +
+        'stopped. Amending the scope of work would change what the agent is told on every ' +
+        'future call to fix something no rule caused. What this call needs is the service ' +
+        'request that was never raised.',
+    };
+  }
+  return { warranted: true, reason: '' };
+}
+
+/**
+ * The service request this call should have produced, drafted from the call.
+ *
+ * Every value is taken from the record or the transcript. Nothing is invented:
+ * where a detail is genuinely absent it is named in `missing` rather than
+ * guessed, because a request filed against the wrong building is worse than one
+ * not filed yet.
+ *
+ * THE SITE IS MATCHED, NOT PARSED. The caller said "Skyline—" and was cut off
+ * mid-word; the agent echoed "Got it, Skyline." Pulling a site name out of that
+ * with a regex is guesswork. Instead every live CMMS site name is checked
+ * against the transcript, so the answer comes from the site list and the only
+ * question asked of the transcript is whether it mentions one. An ambiguous
+ * match is reported as ambiguous — never resolved by picking the first.
+ *
+ * The CMMS create action has no category field and no caller-contact field
+ * (subject, site, description, urgency and record lookups are the whole of it),
+ * so the caller's number, the source call and the category read off the fault
+ * go into the description, where they will actually land.
+ */
+async function draftServiceRequestFor(
+  db: any,
+  convo: any,
+  turns: any[],
+  dev: any,
+): Promise<{
+  subject: string;
+  description: string;
+  urgency: string;
+  siteId: number | null;
+  siteName: string;
+  siteNote: string;
+  fields: Array<{ label: string; value: string }>;
+  missing: string[];
+}> {
+  const callerTurns = turns.filter(
+    (t: any) => t.performer === 'caller' && String(t.message ?? '').trim(),
+  );
+  const faultWords = String(callerTurns[0]?.message ?? '').trim();
+  const phone = String(convo?.caller_phone ?? '').trim();
+  const callId = String(convo?.call_id ?? convo?.id ?? '').trim();
+
+  // ---- the site, from the live list ------------------------------------
+  const haystack = turns
+    .map((t: any) => String(t.message ?? ''))
+    .join(' \n ')
+    .toLowerCase();
+
+  let siteId: number | null = null;
+  let siteName = '';
+  let siteNote = '';
+  const stored = String(convo?.site_hint ?? '').trim();
+
+  try {
+    const sites = rowsOf(await cmms('list-sites', { page_size: 200, page: 1 }));
+    const named = sites.filter((s: any) => {
+      const n = String(s.name ?? '').trim().toLowerCase();
+      if (!n) return false;
+      // The whole name, or its leading word — "Skyline" for "Skyline Towers".
+      // A one-word site name is its own leading word, so this is one test.
+      return haystack.includes(n) || haystack.includes(n.split(/\s+/)[0]);
+    });
+    const exact = stored
+      ? sites.filter((s: any) => String(s.name ?? '').trim().toLowerCase() === stored.toLowerCase())[0]
+      : null;
+    const pick = exact ?? (named.length === 1 ? named[0] : null);
+    if (pick) {
+      siteId = Number(pick.id);
+      siteName = String(pick.name ?? '');
+      siteNote = exact ? 'from the call record' : 'matched from the call';
+    } else if (named.length > 1) {
+      siteNote = `the call mentions ${named.length} sites — ${named
+        .map((s: any) => s.name)
+        .join(', ')} — so which one is unknown`;
+    } else {
+      siteNote = 'no site in the CMMS matches anything said on this call';
+    }
+  } catch (err) {
+    // The site list is a live read and can fail on its own. Say so; do not
+    // report "no site" for what is really "could not look".
+    siteNote = `the CMMS site list could not be read (${err instanceof Error ? err.message : String(err)})`;
+  }
+
+  // ---- the rest --------------------------------------------------------
+  // The caller's words, with the greeting taken off the front — "Hi, there has
+  // been an issue with the TV" is a hello, not a subject line. Nothing is
+  // reworded: only a leading salutation and a trailing dangling dash are
+  // removed, so what is left is still what they said.
+  const subject =
+    (faultWords
+      ? faultWords
+          .replace(/\s+/g, ' ')
+          .replace(/^\s*(hi|hello|hey|yeah|yes|good\s+(morning|afternoon|evening))\b[\s,.!-]*/i, '')
+          .replace(/[—–\-\s]+$/, '')
+          .replace(/^./, (ch: string) => ch.toUpperCase())
+          .slice(0, 120)
+      : 'Reported fault') || 'Reported fault';
+
+  // Urgency comes from the CALL, not from whichever finding you happened to
+  // open. Two panels on one call proposing different urgency for the same piece
+  // of work is not a judgement, it is an inconsistency — so this reads the worst
+  // severity recorded against the conversation.
+  //
+  // It remains a PROXY, and a rough one: governance severity says how badly the
+  // process failed, not how fast a technician is needed. It is shown as a
+  // drafted field precisely so the person approving can disagree with it.
+  let worst = String(dev?.severity ?? '');
+  try {
+    const sevs = db
+      .query('select severity from deviations where conversation_id = $1', [convo?.id])
+      .rows.map((r: any) => String(r.severity ?? ''));
+    if (sevs.indexOf('critical') >= 0) worst = 'critical';
+    else if (sevs.indexOf('high') >= 0) worst = 'high';
+  } catch {
+    // Keep this finding's own severity rather than failing the whole draft.
+  }
+  const urgency = ['critical', 'high'].indexOf(worst) >= 0 ? 'Urgent' : 'Not Urgent';
+
+  const description = [
+    `Reported by the caller on call ${callId}, in their words:`,
+    `"${faultWords || 'no caller turn recorded'}"`,
+    '',
+    `Caller contact: ${phone || 'not recorded on this call'}`,
+    `Source: helpdesk call ${callId}${convo?.started_at ? ` (${convo.started_at})` : ''}`,
+    `Category: read from the fault as described above — the CMMS create action has no category field, so it is recorded here.`,
+    '',
+    `Raised by Hue governance from finding ${dev?.id ?? ''}: ${String(dev?.summary ?? '').slice(0, 600)}`,
+  ]
+    .join('\n')
+    .slice(0, 2000);
+
+  const missing: string[] = [];
+  if (!siteId) missing.push('site');
+  if (!faultWords) missing.push('what the caller reported');
+
+  const fields = [
+    { label: 'Subject', value: subject },
+    { label: 'Site', value: siteName ? `${siteName} (${siteId})` : `— ${siteNote}` },
+    { label: 'Urgency', value: urgency },
+    { label: 'Caller contact', value: phone || '—' },
+    { label: 'Source call', value: callId || '—' },
+    { label: 'Description', value: faultWords || '—' },
+  ];
+
+  return { subject, description, urgency, siteId, siteName, siteNote, fields, missing };
+}
+
+/**
  * Create or update — decided by the JOIN, never by the model.
  *
  * The proposer suggests a verb, but it is reading a transcript, not the CMMS.
@@ -2798,12 +3067,41 @@ async function deviationContext(db: any, deviationId: string, memo?: (id: string
  * a call with one needs it corrected. Both the button and the write read this,
  * so they cannot disagree about what is about to happen.
  */
-function cmmsPlanFor(convo: any, action: any): { verb: string; recordId: string | null; reason: string } {
+function cmmsPlanFor(
+  convo: any,
+  action: any,
+  turns?: any[],
+): { verb: string; recordId: string | null; reason: string } {
   const recordId = String(convo?.cmms_sr_id ?? '').trim() || null;
   const proposed = String(action?.verb ?? 'none');
 
-  // The proposer named no CMMS work: this is a prompt, scope or human fix.
+  // GROUND TRUTH OVERRULES SILENCE, not just a wrong verb.
+  //
+  // The rule above this function is that the join decides and the model does
+  // not. That was applied to create-vs-update and stopped there: if the
+  // proposer named no CMMS work at all, the answer was "none" and the panel
+  // said NOTHING DRAFTED — on a call with a reported fault and no record, which
+  // is precisely the call that needs one written. The proposer is drafting from
+  // a transcript and routinely reaches for a prompt fix; that is a reason to
+  // check the CMMS, not to defer to it.
+  //
+  // So: a caller spoke, no record exists, and the call ended with the agent
+  // still asking. Nothing is written by this — it decides what the DRAFT shows.
+  // The write still needs the button.
   if (proposed !== 'create' && proposed !== 'update') {
+    const last = turns && turns.length ? turns[turns.length - 1] : null;
+    const callerSpoke = (turns ?? []).some(
+      (t: any) => t.performer === 'caller' && String(t.message ?? '').trim().length > 3,
+    );
+    if (!recordId && callerSpoke && last && last.performer === 'agent') {
+      return {
+        verb: 'create',
+        recordId: null,
+        reason:
+          'No service request was raised for this call. The caller reported a fault and the ' +
+          'call ended before anything reached the CMMS, so the record has to be made.',
+      };
+    }
     return { verb: 'none', recordId, reason: 'This correction does not write to the CMMS.' };
   }
   if (!recordId) {
@@ -2903,7 +3201,47 @@ server.addHandler({
   execute: async (args) => {
     const db = connect();
     const corrId = String(args.correctionId ?? '').trim();
-    const corr = db.query('select * from corrections where id = $1 limit 1', [corrId]).rows[0];
+    let corr = db.query('select * from corrections where id = $1 limit 1', [corrId]).rows[0];
+
+    // A RECORD FIX DOES NOT NEED A PROPOSER TO HAVE RUN.
+    //
+    // The correction row used to be a precondition, so raising the service
+    // request a call never got was gated behind a model having first drafted an
+    // opinion about the agent. That is backwards: whether the CMMS is missing a
+    // record is a fact about the join, not a matter for a proposal. Where the
+    // plan says create and no row exists, one is opened here so the write still
+    // has its idempotency key and its audit trail.
+    if (!corr && corrId.startsWith('CO-')) {
+      const devId = corrId.slice('CO-'.length);
+      const d = db.query('select * from deviations where id = $1 limit 1', [devId]).rows[0];
+      const c = d
+        ? db.query('select * from conversations where id = $1 limit 1', [d.conversation_id]).rows[0]
+        : null;
+      const t = d
+        ? db.query(
+            'select * from transcript_turns where conversation_id = $1 order by turn_index',
+            [d.conversation_id],
+          ).rows
+        : [];
+      if (c && cmmsPlanFor(c, {}, t).verb === 'create') {
+        db.query(
+          `insert into corrections
+             (id, deviation_id, target, title, rationale, before_text, after_text, state,
+              recommended_action, assignee, cmms_action, proposed_at, applied_at,
+              applied_record_id, applied_write_key)
+           values ($1,$2,'cmms',$3,$4,'','','proposed','','',$5,$6,'','','')`,
+          [
+            corrId,
+            devId,
+            'Raise the service request this call never produced',
+            'The join found no service request for this call. The record is drafted from the call itself.',
+            JSON.stringify({ verb: 'create', fields: [], recordId: '' }),
+            nowIso(),
+          ],
+        );
+        corr = db.query('select * from corrections where id = $1 limit 1', [corrId]).rows[0];
+      }
+    }
     if (!corr) throw new Error(`No correction ${corrId}`);
 
     // --- Idempotency guard -------------------------------------------------
@@ -2942,7 +3280,12 @@ server.addHandler({
     // "create" verdict against a call that already has a record from raising a
     // duplicate — and stops an "update" against a call that has none from
     // silently writing nowhere.
-    const plan = cmmsPlanFor(convo, action);
+    const turns = db.query(
+      'select * from transcript_turns where conversation_id = $1 order by turn_index',
+      [dev.conversation_id],
+    ).rows;
+
+    const plan = cmmsPlanFor(convo, action, turns);
     const verb = plan.verb;
 
     // ---- Everything that can be checked, checked BEFORE the key is claimed --
@@ -2951,6 +3294,10 @@ server.addHandler({
     // to one attempt. Claiming it and then discovering the write is impossible
     // is how an approval becomes permanently unretryable.
     let siteId: number | null = null;
+    // The record drafted from the call itself, used when the proposer named no
+    // CMMS fields — which is every finding the plan promoted to `create` on
+    // ground truth rather than on the proposer's say-so.
+    let draft: Awaited<ReturnType<typeof draftServiceRequestFor>> | null = null;
     if (verb === 'create') {
       // The record the agent claimed but never made. The site is REQUIRED by
       // create-service-request and is never invented — but it is looked for in
@@ -2965,11 +3312,21 @@ server.addHandler({
       const hint = (named || String(convo?.site_hint ?? '')).trim().toLowerCase();
 
       if (!hint) {
-        throw new Error(
-          'Cannot create: this call records no site, and the drafted fix names none. ' +
-            'A service request needs a site, and guessing one would put the request in the wrong building.',
-        );
-      }
+        // No site on the record and none in the draft — but the caller may well
+        // have SAID one. The draft matches the transcript against the live site
+        // list, which is how "Skyline—", cut off mid-word, still resolves. This
+        // used to throw here, which is what made create impossible for exactly
+        // the calls that most needed a record.
+        draft = await draftServiceRequestFor(db, convo, turns, dev);
+        siteId = draft.siteId;
+        if (!siteId) {
+          throw new Error(
+            `Cannot create: ${draft.siteNote}. A service request needs a site, and ` +
+              'guessing one would put the request in the wrong building. Everything else ' +
+              `is ready — subject "${draft.subject}", caller ${convo?.caller_phone || 'unknown'}.`,
+          );
+        }
+      } else {
       const sitesPayload = await cmms('list-sites', { page_size: 200, page: 1 });
       const sites = rowsOf(sitesPayload);
       const exact = sites.filter((x: any) => String(x.name ?? '').trim().toLowerCase() === hint)[0];
@@ -2987,6 +3344,7 @@ server.addHandler({
         );
       }
       siteId = Number(site.id);
+      }
     }
 
     // Only now, with the write known to be possible.
@@ -3062,19 +3420,27 @@ server.addHandler({
       });
       appliedRecordId = String(convo.cmms_sr_id);
     } else if (verb === 'create') {
+      // The same draft the panel previewed, so the record written is the record
+      // that was approved. Built here if the site came from the proposer's own
+      // fields and the precheck never needed it.
+      if (!draft) draft = await draftServiceRequestFor(db, convo, turns, dev);
+
       const created = await cmms('create-service-request', {
         servicerequest: {
-          subject: String(corr.title || 'Raised by Hue governance').slice(0, 255),
-          description:
-            `${String(corr.rationale ?? '')}\n\n` +
-            `Raised by Hue from call ${convo.call_id}: the agent confirmed this request to the caller but no record existed.`.slice(
-              0,
-              2000,
-            ),
+          // The caller's own words, not the correction's title — a title like
+          // "Require full site name read-back before proceeding" describes a
+          // PROMPT fix and is meaningless on a work record.
+          subject: draft.subject.slice(0, 255),
+          // The description used to assert "the agent confirmed this request to
+          // the caller but no record existed". True for one case and false for
+          // the rest: on a call that was cut, the agent confirmed nothing.
+          description: `${draft.description}${
+            corr.rationale ? `\n\nProposer's rationale: ${corr.rationale}` : ''
+          }`.slice(0, 2000),
           // `site`, not `siteId` — the action's own description is explicit
           // that responses may echo it under siteId but the input key is site.
           site: { id: siteId },
-          urgency: 'Urgent',
+          urgency: draft.urgency,
         },
       });
       const rec = created?.data ?? created;
@@ -3932,18 +4298,41 @@ server.addHandler({
       ? await currentClauseFor(db, String(dev.criterion_id ?? ''), String(dev.clause_ref ?? ''))
       : null;
 
-    if (!row) return { correction: null, cmmsPlan: null, currentClause };
-
+    // The call, its turns, and what they say about the two panels. All of this
+    // is about the DEVIATION, so — like currentClause above — it resolves
+    // whether or not anything has been drafted. A call with no service request
+    // needs one raised regardless of whether a proposer has run.
     const convo = dev
       ? db.query('select * from conversations where id = $1 limit 1', [dev.conversation_id]).rows[0]
       : null;
+    const turns = dev
+      ? db.query(
+          'select * from transcript_turns where conversation_id = $1 order by turn_index',
+          [dev.conversation_id],
+        ).rows
+      : [];
+    const agentFix = convo ? agentFixFor(convo, turns) : { warranted: true, reason: '' };
 
     let cmmsAction: any = {};
-    try {
-      cmmsAction =
-        typeof row.cmms_action === 'string' ? JSON.parse(row.cmms_action || '{}') : row.cmms_action ?? {};
-    } catch {
-      cmmsAction = {};
+    if (row) {
+      try {
+        cmmsAction =
+          typeof row.cmms_action === 'string'
+            ? JSON.parse(row.cmms_action || '{}')
+            : row.cmms_action ?? {};
+      } catch {
+        cmmsAction = {};
+      }
+    }
+
+    const plan = convo ? cmmsPlanFor(convo, cmmsAction, turns) : null;
+    // Drafted only when something is actually going to be created — the site
+    // lookup is a live CMMS read and must not run on every detail view.
+    const draft =
+      plan?.verb === 'create' && convo ? await draftServiceRequestFor(db, convo, turns, dev) : null;
+
+    if (!row) {
+      return { correction: null, cmmsPlan: plan, cmmsDraft: draft, agentFix, currentClause };
     }
 
     return {
@@ -3969,7 +4358,11 @@ server.addHandler({
       },
       // What the write would actually do, decided here so the button cannot
       // promise something different from what the server will perform.
-      cmmsPlan: cmmsPlanFor(convo, cmmsAction),
+      cmmsPlan: plan,
+      // The record this call should have produced, and whether an agent-side
+      // fix is the right instrument at all.
+      cmmsDraft: draft,
+      agentFix,
       currentClause,
     };
   },
