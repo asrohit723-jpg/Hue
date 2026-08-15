@@ -30,14 +30,14 @@ import { page } from '../lib/layout';
 // The most rows listConversations will return. Matches its server-side clamp.
 const ROW_CAP = 200;
 
-const CARD_BORDER = '#E1E8F2';
-const HERO_INK = '#0C447C';
-const SPARK_STROKE = '#378ADD';
+const CARD_BORDER = 'var(--border-default)';
+const HERO_INK = 'var(--blue-700)';
+const SPARK_STROKE = 'var(--blue-400)';
 
 const card: React.CSSProperties = {
-  background: '#fff',
+  background: 'var(--surface-card)',
   border: `1px solid ${CARD_BORDER}`,
-  borderRadius: 12,
+  borderRadius: 'var(--radius-lg)',
 };
 const kpiLabel: React.CSSProperties = {
   fontSize: 11,
@@ -550,9 +550,9 @@ export function Overview({
             style={{
               height: 36,
               padding: '0 14px',
-              borderRadius: 4,
+              borderRadius: 'var(--radius-sm)',
               border: '1px solid var(--border-default)',
-              background: '#fff',
+              background: 'var(--surface-card)',
               color: 'var(--ink-900)',
               fontWeight: 500,
               fontSize: 13,
@@ -598,7 +598,7 @@ export function Overview({
               style={{
                 fontSize: 12,
                 fontWeight: 600,
-                borderRadius: 999,
+                borderRadius: 'var(--radius-pill)',
                 padding: '3px 10px',
                 color:
                   v.delta === null
@@ -745,7 +745,7 @@ export function Overview({
                 <div
                   style={{
                     height: 8,
-                    borderRadius: 999,
+                    borderRadius: 'var(--radius-pill)',
                     background: 'var(--ink-100)',
                     overflow: 'hidden',
                   }}
@@ -755,7 +755,7 @@ export function Overview({
                       height: '100%',
                       width: `${b.pct}%`,
                       background: b.color,
-                      borderRadius: 999,
+                      borderRadius: 'var(--radius-pill)',
                     }}
                   />
                 </div>
@@ -819,7 +819,7 @@ export function Overview({
                   style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 14 }}
                 >
                   <span
-                    style={{ width: 10, height: 10, borderRadius: 2, background: s.color }}
+                    style={{ width: 10, height: 10, borderRadius: 'var(--radius-sm)', background: s.color }}
                   />
                   <span style={{ flex: 1 }}>{s.label}</span>
                   <span style={{ fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
@@ -845,7 +845,7 @@ export function Overview({
       {/* recent interventions */}
       <div style={{ marginTop: 16 }}>
         <div
-          style={{ background: '#fff', border: '1px solid var(--border-default)', borderRadius: 8 }}
+          style={{ background: 'var(--surface-card)', border: '1px solid var(--border-default)', borderRadius: 'var(--radius-lg)' }}
         >
           <div
             style={{
@@ -869,7 +869,7 @@ export function Overview({
                   style={{
                     width: 6,
                     height: 6,
-                    borderRadius: 999,
+                    borderRadius: 'var(--radius-pill)',
                     background: sevDot(r.severity),
                     flex: '0 0 6px',
                   }}
@@ -886,7 +886,7 @@ export function Overview({
                     fontSize: 11,
                     fontWeight: 600,
                     padding: '2px 8px',
-                    borderRadius: 999,
+                    borderRadius: 'var(--radius-pill)',
                     background: tone.bg,
                     color: tone.fg,
                     textTransform: 'capitalize',
@@ -945,7 +945,7 @@ function Row({ onClick, children }: { onClick: () => void; children: React.React
         padding: '12px 20px',
         borderBottom: '1px solid var(--ink-100)',
         cursor: 'pointer',
-        background: '#fff',
+        background: 'var(--surface-card)',
       }}
     >
       {children}

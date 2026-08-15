@@ -52,9 +52,12 @@ export function rootCauseTone(r: string): Tone {
     case 'agent':
       return { bg: 'var(--brand-indigo-050)', fg: 'var(--brand-indigo)' };
     case 'data':
-      return { bg: 'var(--blue-025)', fg: 'var(--blue-600)' };
+      return { bg: 'var(--badge-accent-bg)', fg: 'var(--badge-accent-fg)' };
     default:
-      return { bg: 'var(--warning-050)', fg: 'var(--warning-700)' };
+      // 'unknown' and 'sow' are NEUTRAL, not warning. Yellow reads as "something
+      // is wrong"; an unclassified root cause means nobody has looked yet, which
+      // is an absence rather than a fault. Semantic colour marks state only.
+      return { bg: 'var(--badge-neutral-bg)', fg: 'var(--badge-neutral-fg)' };
   }
 }
 

@@ -79,9 +79,9 @@ const TAB_LABEL: Record<QualityTab, string> = {
 
 
 const panel: React.CSSProperties = {
-  background: '#fff',
+  background: 'var(--surface-card)',
   border: '1px solid var(--border-default)',
-  borderRadius: 8,
+  borderRadius: 'var(--radius-lg)',
 };
 const railHead: React.CSSProperties = {
   padding: '12px 16px',
@@ -103,7 +103,7 @@ const statusPill: React.CSSProperties = {
   gap: 6,
   height: 26,
   padding: '0 11px',
-  borderRadius: 999,
+  borderRadius: 'var(--radius-pill)',
   fontSize: 12,
   fontWeight: 600,
   whiteSpace: 'nowrap',
@@ -447,9 +447,9 @@ export function ConversationDetail({
             gap: 7,
             height: 32,
             padding: '0 12px 0 10px',
-            borderRadius: 6,
+            borderRadius: 'var(--radius-sm)',
             border: '1px solid var(--border-default)',
-            background: '#fff',
+            background: 'var(--surface-card)',
             color: 'var(--ink-900)',
             fontSize: 13,
             fontWeight: 500,
@@ -482,9 +482,9 @@ export function ConversationDetail({
             width: 40,
             height: 40,
             flex: '0 0 40px',
-            borderRadius: 999,
+            borderRadius: 'var(--radius-pill)',
             background: c.srRecordId ? avatarColor(name) : 'var(--danger-500)',
-            color: '#fff',
+            color: 'var(--surface-card)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -504,7 +504,7 @@ export function ConversationDetail({
                 letterSpacing: '.03em',
                 textTransform: 'uppercase',
                 padding: '2px 8px',
-                borderRadius: 999,
+                borderRadius: 'var(--radius-pill)',
                 background: cht.bg,
                 color: cht.fg,
                 whiteSpace: 'nowrap',
@@ -594,9 +594,9 @@ export function ConversationDetail({
             style={{
               height: 36,
               padding: '0 14px',
-              borderRadius: 4,
+              borderRadius: 'var(--radius-sm)',
               border: '1px solid var(--border-default)',
-              background: '#fff',
+              background: 'var(--surface-card)',
               color: grading ? 'var(--ink-500)' : 'var(--ink-900)',
               fontWeight: 500,
               fontSize: 13,
@@ -626,10 +626,10 @@ export function ConversationDetail({
               style={{
                 height: 36,
                 padding: '0 14px',
-                borderRadius: 4,
+                borderRadius: 'var(--radius-sm)',
                 border: '1px solid var(--blue-500)',
                 background: 'var(--blue-500)',
-                color: '#fff',
+                color: 'var(--surface-card)',
                 fontWeight: 500,
                 fontSize: 13,
                 cursor: 'pointer',
@@ -712,7 +712,7 @@ export function ConversationDetail({
                   fontSize: 11,
                   fontWeight: 600,
                   padding: '2px 8px',
-                  borderRadius: 999,
+                  borderRadius: 'var(--radius-pill)',
                   background: sent.bg,
                   color: sent.fg,
                 }}
@@ -737,7 +737,7 @@ export function ConversationDetail({
                       fontSize: 12,
                       fontWeight: 500,
                       padding: '2px 9px',
-                      borderRadius: 999,
+                      borderRadius: 'var(--radius-pill)',
                       border: '1px solid var(--border-default)',
                       color: 'var(--ink-700)',
                     }}
@@ -938,10 +938,10 @@ function RecordingBar({
           width: 36,
           height: 36,
           flex: '0 0 36px',
-          borderRadius: 999,
+          borderRadius: 'var(--radius-pill)',
           border: `1px solid ${has ? 'var(--blue-500)' : 'var(--border-default)'}`,
           background: has ? 'var(--blue-500)' : 'var(--ink-100)',
-          color: has ? '#fff' : 'var(--ink-400)',
+          color: has ? 'var(--surface-card)' : 'var(--ink-400)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -1023,9 +1023,9 @@ function RecordingBar({
         style={{
           width: 34,
           height: 34,
-          borderRadius: 4,
+          borderRadius: 'var(--radius-sm)',
           border: '1px solid var(--border-default)',
-          background: '#fff',
+          background: 'var(--surface-card)',
           color: url ? 'var(--ink-600)' : 'var(--ink-300)',
           display: 'flex',
           alignItems: 'center',
@@ -1091,7 +1091,7 @@ function QualityCard({
               color: tab === k ? 'var(--blue-600)' : 'var(--ink-600)',
               fontWeight: 600,
               fontSize: 13,
-              borderRadius: 6,
+              borderRadius: 'var(--radius-sm)',
               cursor: 'pointer',
             }}
           >
@@ -1179,7 +1179,7 @@ function ScoreTab({
             </span>
           </div>
           <div
-            style={{ height: 6, borderRadius: 999, background: 'var(--ink-100)', overflow: 'hidden' }}
+            style={{ height: 6, borderRadius: 'var(--radius-pill)', background: 'var(--ink-100)', overflow: 'hidden' }}
           >
             <div
               style={{
@@ -1193,7 +1193,7 @@ function ScoreTab({
                       : r.value >= 65
                         ? 'var(--warning-500)'
                         : 'var(--danger-500)',
-                borderRadius: 999,
+                borderRadius: 'var(--radius-pill)',
               }}
             />
           </div>
@@ -1238,7 +1238,7 @@ function ScoreTab({
                     fontSize: 11,
                     fontWeight: 600,
                     padding: '2px 8px',
-                    borderRadius: 999,
+                    borderRadius: 'var(--radius-pill)',
                     background: 'var(--danger-050)',
                     color: 'var(--danger-700)',
                   }}
@@ -1253,7 +1253,7 @@ function ScoreTab({
                     fontSize: 11,
                     fontWeight: 600,
                     padding: '2px 8px',
-                    borderRadius: 999,
+                    borderRadius: 'var(--radius-pill)',
                     background: 'var(--success-050)',
                     color: 'var(--success-700)',
                   }}
@@ -1357,13 +1357,13 @@ function EvalTab({
                 style={{
                   width: 16,
                   height: 16,
-                  borderRadius: 999,
+                  borderRadius: 'var(--radius-pill)',
                   background: skip
                     ? 'var(--ink-050)'
                     : failed
                       ? 'var(--danger-500)'
                       : 'var(--success-050)',
-                  color: skip ? 'var(--ink-500)' : failed ? '#fff' : 'var(--success-700)',
+                  color: skip ? 'var(--ink-500)' : failed ? 'var(--surface-card)' : 'var(--success-700)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -1399,7 +1399,7 @@ function EvalTab({
                       fontSize: 12,
                       color: 'var(--ink-600)',
                       background: 'var(--ink-050)',
-                      borderRadius: 6,
+                      borderRadius: 'var(--radius-sm)',
                       padding: '7px 9px',
                       marginTop: 6,
                       lineHeight: '17px',
@@ -1414,7 +1414,7 @@ function EvalTab({
                       fontSize: 12,
                       color: 'var(--danger-700)',
                       background: 'var(--danger-050)',
-                      borderRadius: 6,
+                      borderRadius: 'var(--radius-sm)',
                       padding: '7px 9px',
                       marginTop: 6,
                       lineHeight: '17px',
@@ -1466,7 +1466,7 @@ function SentimentTab({
             fontSize: 11,
             fontWeight: 600,
             padding: '2px 8px',
-            borderRadius: 999,
+            borderRadius: 'var(--radius-pill)',
             background: tone.bg,
             color: tone.fg,
           }}
@@ -1481,7 +1481,7 @@ function SentimentTab({
               style={{
                 background: 'var(--warning-050)',
                 border: '1px solid var(--warning-500)',
-                borderRadius: 6,
+                borderRadius: 'var(--radius-sm)',
                 padding: '9px 11px',
                 fontSize: 12,
                 color: 'var(--warning-700)',
@@ -1581,12 +1581,12 @@ function Turn({ t }: { t: TurnWithToolIO }) {
         </span>
         <div
           style={{
-            background: isAgent ? 'var(--blue-025)' : isSystem ? 'var(--ink-050)' : '#fff',
+            background: isAgent ? 'var(--blue-025)' : isSystem ? 'var(--ink-050)' : 'var(--surface-card)',
             color: 'var(--ink-900)',
             border: `1px solid ${
               isAgent ? 'var(--blue-050)' : isSystem ? 'var(--border-default)' : 'var(--border-default)'
             }`,
-            borderRadius: 10,
+            borderRadius: 'var(--radius-lg)',
             padding: '9px 13px',
             lineHeight: '20px',
           }}
@@ -1646,13 +1646,13 @@ function CmmsPanel({
   return (
     <div
       style={{
-        background: '#fff',
+        background: 'var(--surface-card)',
         border: `1px solid ${found ? 'var(--border-default)' : 'var(--danger-500)'}`,
-        borderRadius: 8,
+        borderRadius: 'var(--radius-lg)',
         overflow: 'hidden',
       }}
     >
-      <div style={{ ...railHead, background: found ? '#fff' : 'var(--danger-050)' }}>
+      <div style={{ ...railHead, background: found ? 'var(--surface-card)' : 'var(--danger-050)' }}>
         <svg
           width="16"
           height="16"
@@ -1699,7 +1699,7 @@ function CmmsPanel({
                 fontSize: 11,
                 fontWeight: 600,
                 padding: '2px 8px',
-                borderRadius: 999,
+                borderRadius: 'var(--radius-pill)',
                 background: 'var(--success-050)',
                 color: 'var(--success-700)',
               }}
@@ -1773,7 +1773,7 @@ function CmmsPanel({
               fontSize: 12,
               color: 'var(--danger-700)',
               background: 'rgba(182,25,25,0.06)',
-              borderRadius: 6,
+              borderRadius: 'var(--radius-sm)',
               padding: '10px 12px',
             }}
           >
@@ -1793,10 +1793,10 @@ function CmmsPanel({
               onClick={onOpenIntervention}
               style={{
                 height: 34,
-                borderRadius: 4,
+                borderRadius: 'var(--radius-sm)',
                 border: '1px solid var(--danger-500)',
                 background: 'var(--danger-500)',
-                color: '#fff',
+                color: 'var(--surface-card)',
                 fontWeight: 500,
                 fontSize: 13,
                 cursor: 'pointer',

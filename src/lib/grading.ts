@@ -44,17 +44,19 @@ export function gradingLabel(g: GradingState | null | undefined): string {
 export function gradingTone(g: GradingState | null | undefined): { bg: string; fg: string } {
   switch (g?.status) {
     case 'grading':
-      return { bg: 'var(--blue-050)', fg: 'var(--blue-600)' };
+      return { bg: 'var(--badge-accent-bg)', fg: 'var(--badge-accent-fg)' };
     case 'graded':
       // A grade with judges that never answered is NOT a clean one. It keeps
       // the warning colour rather than reading as a completed pass.
       return g && g.criteriaUnavailable > 0
-        ? { bg: 'var(--warning-050)', fg: 'var(--warning-700)' }
-        : { bg: 'var(--success-050)', fg: 'var(--success-700)' };
+        ? { bg: 'var(--badge-warn-bg)', fg: 'var(--badge-warn-fg)' }
+        : { bg: 'var(--badge-pass-bg)', fg: 'var(--badge-pass-fg)' };
     case 'unavailable':
-      return { bg: 'var(--warning-050)', fg: 'var(--warning-700)' };
+      return { bg: 'var(--badge-warn-bg)', fg: 'var(--badge-warn-fg)' };
     default:
-      return { bg: 'var(--ink-050)', fg: 'var(--ink-600)' };
+      // "Awaiting grading" is neutral: nothing has gone wrong, it has not
+      // started.
+      return { bg: 'var(--badge-neutral-bg)', fg: 'var(--badge-neutral-fg)' };
   }
 }
 

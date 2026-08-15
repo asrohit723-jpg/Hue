@@ -208,9 +208,9 @@ export function Patterns({
         {patterns.length === 0 && (
           <div
             style={{
-              background: '#fff',
+              background: 'var(--surface-card)',
               border: '1px solid var(--border-default)',
-              borderRadius: 10,
+              borderRadius: 'var(--radius-lg)',
               padding: '44px 24px',
               textAlign: 'center',
             }}
@@ -219,7 +219,7 @@ export function Patterns({
               style={{
                 width: 44,
                 height: 44,
-                borderRadius: 999,
+                borderRadius: 'var(--radius-pill)',
                 background: 'var(--success-050)',
                 color: 'var(--success-700)',
                 display: 'inline-flex',
@@ -317,9 +317,9 @@ function PatternCard({
   return (
     <div
       style={{
-        background: '#fff',
+        background: 'var(--surface-card)',
         border: '1px solid var(--border-default)',
-        borderRadius: 10,
+        borderRadius: 'var(--radius-lg)',
         overflow: 'hidden',
       }}
     >
@@ -342,11 +342,11 @@ function PatternCard({
                 fontWeight: 600,
                 color: rc.fg,
                 background: rc.bg,
-                borderRadius: 999,
+                borderRadius: 'var(--radius-pill)',
                 padding: '3px 9px',
               }}
             >
-              <span style={{ width: 6, height: 6, borderRadius: 2, background: rc.fg }} />
+              <span style={{ width: 6, height: 6, borderRadius: 'var(--radius-sm)', background: rc.fg }} />
               {label(p.rootCause)}
             </span>
             <span
@@ -355,7 +355,7 @@ function PatternCard({
                 fontWeight: 600,
                 color: 'var(--blue-600)',
                 background: 'var(--blue-025)',
-                borderRadius: 999,
+                borderRadius: 'var(--radius-pill)',
                 padding: '3px 9px',
               }}
             >
@@ -434,7 +434,7 @@ function PatternCard({
                   }}
                 >
                   {isLast && (
-                    <span style={{ fontSize: 11, fontWeight: 600, color: '#0C447C', lineHeight: '13px' }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--blue-700)', lineHeight: '13px' }}>
                       {b}
                     </span>
                   )}
@@ -444,7 +444,7 @@ function PatternCard({
                       // A zero month still draws a sliver, so the axis reads as
                       // twelve months rather than a gap.
                       height: `${b === 0 ? 2 : Math.max(6, Math.round((b / peak) * 100))}%`,
-                      background: isLast ? '#0C447C' : '#DCE7F7',
+                      background: isLast ? 'var(--blue-700)' : 'var(--border-default)',
                       borderRadius: '2px 2px 0 0',
                     }}
                   />
@@ -463,7 +463,7 @@ function PatternCard({
             }}
           >
             <span>12 months ago</span>
-            <span style={{ color: '#0C447C', fontWeight: 600 }}>this month</span>
+            <span style={{ color: 'var(--blue-700)', fontWeight: 600 }}>this month</span>
           </div>
         </div>
 
@@ -515,10 +515,10 @@ function PatternCard({
                 style={{
                   height: 34,
                   padding: '0 15px',
-                  borderRadius: 6,
+                  borderRadius: 'var(--radius-sm)',
                   border: `1px solid ${applied ? 'var(--success-500)' : 'var(--blue-500)'}`,
                   background: applied ? 'var(--success-050)' : 'var(--blue-500)',
-                  color: applied ? 'var(--success-700)' : '#fff',
+                  color: applied ? 'var(--success-700)' : 'var(--surface-card)',
                   fontWeight: 600,
                   fontSize: 13,
                   cursor: 'pointer',

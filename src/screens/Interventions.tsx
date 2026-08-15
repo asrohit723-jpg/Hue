@@ -190,8 +190,8 @@ export function Interventions({
               key={s.label}
               style={{
                 border: '1px solid var(--border-default)',
-                background: '#fff',
-                borderRadius: 8,
+                background: 'var(--surface-card)',
+                borderRadius: 'var(--radius-lg)',
                 padding: '8px 14px',
                 minWidth: 96,
               }}
@@ -251,9 +251,9 @@ export function Interventions({
       {/* table */}
       <div
         style={{
-          background: '#fff',
+          background: 'var(--surface-card)',
           border: '1px solid var(--border-default)',
-          borderRadius: 8,
+          borderRadius: 'var(--radius-lg)',
           marginTop: 12,
           overflow: 'hidden',
         }}
@@ -305,9 +305,9 @@ export function Interventions({
               style={{
                 height: 38,
                 padding: '0 16px',
-                borderRadius: 4,
+                borderRadius: 'var(--radius-sm)',
                 border: '1px solid var(--border-default)',
-                background: '#fff',
+                background: 'var(--surface-card)',
                 fontWeight: 500,
                 fontSize: 13,
                 cursor: 'pointer',
@@ -324,7 +324,7 @@ export function Interventions({
               style={{
                 width: 44,
                 height: 44,
-                borderRadius: 999,
+                borderRadius: 'var(--radius-pill)',
                 background: 'var(--success-050)',
                 color: 'var(--success-700)',
                 display: 'inline-flex',
@@ -354,9 +354,9 @@ export function Interventions({
               style={{
                 height: 38,
                 padding: '0 16px',
-                borderRadius: 4,
+                borderRadius: 'var(--radius-sm)',
                 border: '1px solid var(--border-default)',
-                background: '#fff',
+                background: 'var(--surface-card)',
                 fontWeight: 500,
                 fontSize: 13,
                 cursor: 'pointer',
@@ -404,7 +404,7 @@ function Row({
         padding: '12px 16px',
         borderBottom: '1px solid var(--ink-100)',
         cursor: 'pointer',
-        background: '#fff',
+        background: 'var(--surface-card)',
       }}
     >
       <span
@@ -423,7 +423,7 @@ function Row({
           style={{
             width: 7,
             height: 7,
-            borderRadius: 999,
+            borderRadius: 'var(--radius-pill)',
             background: sev.dot ?? sev.fg,
             flex: '0 0 7px',
           }}
@@ -449,7 +449,7 @@ function Row({
           fontWeight: 600,
           color: 'var(--blue-600)',
           background: 'var(--blue-025)',
-          borderRadius: 999,
+          borderRadius: 'var(--radius-pill)',
           padding: '2px 8px',
           justifySelf: 'start',
         }}
@@ -471,7 +471,7 @@ function Row({
           fontSize: 11,
           fontWeight: 600,
           padding: '2px 8px',
-          borderRadius: 999,
+          borderRadius: 'var(--radius-pill)',
           background: rc.bg,
           color: rc.fg,
           justifySelf: 'start',
@@ -491,7 +491,7 @@ function Row({
           color: st.fg,
         }}
       >
-        <span style={{ width: 6, height: 6, borderRadius: 999, background: st.fg }} />
+        <span style={{ width: 6, height: 6, borderRadius: 'var(--radius-pill)', background: st.fg }} />
         {st.text}
       </span>
 

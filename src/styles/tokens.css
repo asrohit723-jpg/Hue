@@ -8,8 +8,18 @@
    same weights — avoids shipping 13 TTFs in the bundle. JetBrains Mono was
    already a CDN import in the source file.
 
-   Every var(--*) referenced by the design is defined here. Do not edit
-   values: the design is the visual source of truth.
+   Every var(--*) referenced by the design is defined here. Values are the
+   design's and are not edited — with ONE documented exception, below.
+
+   --ink-500 shipped as #7B91B0, which is 3.22:1 on white and fails WCAG AA for
+   text (4.5:1). It is used for muted copy in ~80 places, so the failure was
+   everywhere at once. Darkening it to #5F7590 (4.74:1) would have made muted
+   text darker than --ink-600 (#607796, 4.59:1) and inverted the ramp, so
+   --ink-600 moved to #4C6383 (6.14:1) to keep the order. Names are unchanged,
+   so nothing that references them had to move.
+
+   --ink-400 is deliberately NOT changed: it is aliased to --border-strong and
+   used as a border, where the 4.5:1 text rule does not apply.
    ========================================================= */
 
 @import url("https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,600;0,700;0,900;1,400;1,500;1,600&family=Roboto+Condensed:wght@400;500;600;700;900&family=JetBrains+Mono:wght@400;500&display=swap");
@@ -37,8 +47,8 @@
   /* ---------- Neutrals (slate) ---------- */
   --ink-900:  #283648;   /* body text, headings */
   --ink-700:  #384A62;
-  --ink-600:  #607796;   /* secondary text */
-  --ink-500:  #7B91B0;   /* muted */
+  --ink-600:  #4C6383;   /* secondary text — 6.14:1 on white */
+  --ink-500:  #5F7590;   /* muted — 4.74:1 on white, was #7B91B0 at 3.22:1 (AA fail) */
   --ink-400:  #9CAFCA;   /* border-strong */
   --ink-300:  #B9B9B9;
   --ink-200:  #D8E3F1;   /* border */
@@ -82,13 +92,20 @@
   --text-onBrand:   var(--white);
   --text-link:      var(--blue-500);
 
-  /* ---------- Radii ---------- */
-  --radius-xs: 2px;
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
-  --radius-xl: 12px;
+  /* ---------- Radii ----------
+     THREE values only — 6, 10, pill. The scale shipped with six (2/4/6/8/12/
+     999), which is six ways to round a corner and no rule for choosing; the
+     result was 4, 5, 6 and 8 all in use within one screen.
+
+     The extra names are kept and aliased rather than deleted, so anything
+     already referencing them keeps working AND lands on an allowed value. */
+  --radius-sm:   6px;
+  --radius-lg:   10px;
   --radius-pill: 999px;
+
+  --radius-xs: var(--radius-sm);
+  --radius-md: var(--radius-sm);
+  --radius-xl: var(--radius-lg);
 
   /* ---------- Spacing (4px base) ---------- */
   --space-1: 4px;
@@ -109,6 +126,29 @@
   --shadow-lg:  0 12px 32px rgba(40,54,72,0.12), 0 2px 4px rgba(40,54,72,0.04);
   --shadow-xl:  0 24px 56px rgba(40,54,72,0.16);
   --shadow-focus: 0 0 0 3px rgba(0,89,214,0.20);
+
+  /* ---------- Elevation, by role rather than by size ----------
+     A card is a surface at rest: a border, no shadow. Something that floats
+     over the page — a popover, a menu — is the only thing that casts one. */
+  --surface-page:    var(--bg-app);
+  --surface-card:    #FFFFFF;
+  --surface-sunken:  var(--ink-050);
+  --shadow-popover:  0 8px 24px rgba(40,54,72,0.12), 0 1px 2px rgba(40,54,72,0.04);
+
+  /* ---------- Badges: five variants, and only five ----------
+     pass / fail / warn / neutral / accent. Semantic colour marks STATE only;
+     anything that is merely absent or unknown is neutral, because yellow reads
+     as a warning and "we have not checked" is not one. */
+  --badge-pass-bg:    var(--success-050);
+  --badge-pass-fg:    var(--success-700);
+  --badge-fail-bg:    var(--danger-050);
+  --badge-fail-fg:    var(--danger-700);
+  --badge-warn-bg:    var(--warning-050);
+  --badge-warn-fg:    var(--warning-700);
+  --badge-neutral-bg: var(--ink-050);
+  --badge-neutral-fg: var(--ink-600);
+  --badge-accent-bg:  var(--blue-025);
+  --badge-accent-fg:  var(--blue-600);
 
   /* ---------- Typography ---------- */
   --font-sans: "Roboto", system-ui, -apple-system, "Segoe UI", sans-serif;

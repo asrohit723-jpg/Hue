@@ -401,7 +401,7 @@ export function InterventionDetail({
                 color: sevT.fg,
               }}
             >
-              <span style={{ width: 8, height: 8, borderRadius: 999, background: sevT.fg }} />
+              <span style={{ width: 8, height: 8, borderRadius: 'var(--radius-pill)', background: sevT.fg }} />
               {dev.severity}
             </span>
             <span
@@ -409,9 +409,9 @@ export function InterventionDetail({
                 fontSize: 12,
                 fontWeight: 500,
                 padding: '3px 10px',
-                borderRadius: 4,
+                borderRadius: 'var(--radius-sm)',
                 border: '1px solid var(--border-default)',
-                background: '#fff',
+                background: 'var(--surface-card)',
                 color: status.fg,
               }}
             >
@@ -448,10 +448,10 @@ export function InterventionDetail({
             style={{
               height: 36,
               padding: '0 14px',
-              borderRadius: 4,
+              borderRadius: 'var(--radius-sm)',
               border: '1px solid var(--blue-500)',
               background: 'var(--blue-500)',
-              color: '#fff',
+              color: 'var(--surface-card)',
               fontWeight: 500,
               fontSize: 13,
               cursor: 'pointer',
@@ -472,9 +472,9 @@ export function InterventionDetail({
       {/* call context strip */}
       <div
         style={{
-          background: '#fff',
+          background: 'var(--surface-card)',
           border: '1px solid var(--border-default)',
-          borderRadius: 8,
+          borderRadius: 'var(--radius-lg)',
           marginTop: 16,
           padding: '6px 18px',
           display: 'flex',
@@ -551,9 +551,9 @@ export function InterventionDetail({
       {/* at a glance */}
       <div
         style={{
-          background: '#fff',
+          background: 'var(--surface-card)',
           border: '1px solid var(--border-default)',
-          borderRadius: 8,
+          borderRadius: 'var(--radius-lg)',
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit,minmax(250px,1fr))',
           overflow: 'hidden',
@@ -596,9 +596,9 @@ export function InterventionDetail({
       {/* the rule + the evidence */}
       <div
         style={{
-          background: '#fff',
+          background: 'var(--surface-card)',
           border: '1px solid var(--border-default)',
-          borderRadius: 8,
+          borderRadius: 'var(--radius-lg)',
           overflow: 'hidden',
           marginTop: 12,
           display: 'grid',
@@ -613,7 +613,7 @@ export function InterventionDetail({
                 fontSize: 11,
                 fontWeight: 600,
                 padding: '2px 8px',
-                borderRadius: 999,
+                borderRadius: 'var(--radius-pill)',
                 background: 'var(--blue-025)',
                 color: 'var(--blue-600)',
               }}
@@ -704,7 +704,7 @@ export function InterventionDetail({
                           textTransform: 'uppercase',
                           color: 'var(--danger-500)',
                           background: 'var(--danger-050)',
-                          borderRadius: 999,
+                          borderRadius: 'var(--radius-pill)',
                           padding: '1px 7px',
                         }}
                       >
@@ -824,7 +824,7 @@ function GlanceCell({
     <div style={{ padding: '14px 18px', borderRight: '1px solid var(--ink-100)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, ...microLabel }}>
         <span
-          style={{ width: 6, height: 6, borderRadius: 999, background: accent, flex: '0 0 6px' }}
+          style={{ width: 6, height: 6, borderRadius: 'var(--radius-pill)', background: accent, flex: '0 0 6px' }}
         />
         {cellLabel}
       </div>
@@ -891,10 +891,10 @@ const STEP_ORDER = ['applied', 'verifying', 'resolved'];
 
 function stepStyle(s: 'done' | 'active' | 'todo') {
   if (s === 'done')
-    return { mark: '✓', dotBg: 'var(--success-500)', dotFg: '#fff', fg: 'var(--ink-900)', bg: '#fff' };
+    return { mark: '✓', dotBg: 'var(--success-500)', dotFg: 'var(--surface-card)', fg: 'var(--ink-900)', bg: 'var(--surface-card)' };
   if (s === 'active')
-    return { mark: '•', dotBg: 'var(--blue-500)', dotFg: '#fff', fg: 'var(--blue-600)', bg: 'var(--blue-025)' };
-  return { mark: '', dotBg: 'var(--ink-200)', dotFg: 'var(--ink-500)', fg: 'var(--ink-500)', bg: '#fff' };
+    return { mark: '•', dotBg: 'var(--blue-500)', dotFg: 'var(--surface-card)', fg: 'var(--blue-600)', bg: 'var(--blue-025)' };
+  return { mark: '', dotBg: 'var(--ink-200)', dotFg: 'var(--ink-500)', fg: 'var(--ink-500)', bg: 'var(--surface-card)' };
 }
 
 /**
@@ -946,9 +946,9 @@ function FixTheAgent({
   return (
     <div
       style={{
-        background: '#fff',
+        background: 'var(--surface-card)',
         border: '1px solid var(--blue-100)',
-        borderRadius: 8,
+        borderRadius: 'var(--radius-lg)',
         overflow: 'hidden',
       }}
     >
@@ -977,7 +977,7 @@ function FixTheAgent({
             fontSize: 11,
             fontWeight: 600,
             padding: '2px 8px',
-            borderRadius: 999,
+            borderRadius: 'var(--radius-pill)',
             background: 'var(--brand-indigo-050)',
             color: 'var(--brand-indigo)',
           }}
@@ -999,7 +999,7 @@ function FixTheAgent({
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          <div style={{ border: '1px solid var(--border-default)', borderRadius: 6, overflow: 'hidden' }}>
+          <div style={{ border: '1px solid var(--border-default)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
             <div
               style={{
                 padding: '7px 12px',
@@ -1042,7 +1042,7 @@ function FixTheAgent({
                   borderTop: '1px solid var(--border-default)',
                   fontSize: 11,
                   color: 'var(--ink-500)',
-                  background: '#fff',
+                  background: 'var(--surface-card)',
                 }}
               >
                 {currentClause.source === 'agent_prompt'
@@ -1051,7 +1051,7 @@ function FixTheAgent({
               </div>
             ) : null}
           </div>
-          <div style={{ border: '1px solid var(--success-400)', borderRadius: 6, overflow: 'hidden' }}>
+          <div style={{ border: '1px solid var(--success-400)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
             <div
               style={{
                 padding: '7px 12px',
@@ -1106,10 +1106,10 @@ function FixTheAgent({
               style={{
                 height: 36,
                 padding: '0 16px',
-                borderRadius: 4,
+                borderRadius: 'var(--radius-sm)',
                 border: '1px solid var(--blue-500)',
                 background: 'var(--blue-500)',
-                color: '#fff',
+                color: 'var(--surface-card)',
                 fontWeight: 500,
                 fontSize: 13,
                 cursor: act.busy ? 'not-allowed' : 'pointer',
@@ -1150,7 +1150,7 @@ function FixTheAgent({
         )}
 
         {isRunning && (
-          <div style={{ border: '1px solid var(--border-default)', borderRadius: 6, overflow: 'hidden' }}>
+          <div style={{ border: '1px solid var(--border-default)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
             {steps.map((s) => (
               <div
                 key={s.title}
@@ -1167,7 +1167,7 @@ function FixTheAgent({
                   style={{
                     width: 18,
                     height: 18,
-                    borderRadius: 999,
+                    borderRadius: 'var(--radius-pill)',
                     background: s.dotBg,
                     color: s.dotFg,
                     display: 'flex',
@@ -1203,7 +1203,7 @@ function FixTheAgent({
             style={{
               border: '1px solid var(--success-400)',
               background: 'var(--success-050)',
-              borderRadius: 6,
+              borderRadius: 'var(--radius-sm)',
               padding: 14,
               display: 'flex',
               gap: 12,
@@ -1229,7 +1229,7 @@ function FixTheAgent({
             style={{
               background: 'var(--warning-050)',
               border: '1px solid var(--warning-500)',
-              borderRadius: 6,
+              borderRadius: 'var(--radius-sm)',
               padding: '12px 14px',
             }}
           >
@@ -1254,7 +1254,7 @@ function FixTheAgent({
             style={{
               background: 'var(--danger-050)',
               border: '1px solid var(--danger-500)',
-              borderRadius: 6,
+              borderRadius: 'var(--radius-sm)',
               padding: '12px 14px',
             }}
           >
@@ -1274,9 +1274,9 @@ function FixTheAgent({
 const secondaryBtn: React.CSSProperties = {
   height: 36,
   padding: '0 14px',
-  borderRadius: 4,
+  borderRadius: 'var(--radius-sm)',
   border: '1px solid var(--border-default)',
-  background: '#fff',
+  background: 'var(--surface-card)',
   fontWeight: 500,
   fontSize: 13,
   cursor: 'pointer',
@@ -1323,9 +1323,9 @@ function FixTheRecord({
   return (
     <div
       style={{
-        background: '#fff',
+        background: 'var(--surface-card)',
         border: '1px solid var(--warning-500)',
-        borderRadius: 8,
+        borderRadius: 'var(--radius-lg)',
         overflow: 'hidden',
       }}
     >
@@ -1363,7 +1363,7 @@ function FixTheRecord({
               : 'The join found no service request for this call. Correcting the agent does not raise the missing request — draft a correction to see the write that would.'}
         </p>
 
-        <div style={{ border: '1px solid var(--border-default)', borderRadius: 6, overflow: 'hidden' }}>
+        <div style={{ border: '1px solid var(--border-default)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
           <div
             style={{
               padding: '8px 12px',
@@ -1381,7 +1381,7 @@ function FixTheRecord({
                 color: 'var(--blue-600)',
                 background: 'var(--blue-025)',
                 border: '1px solid var(--blue-100)',
-                borderRadius: 4,
+                borderRadius: 'var(--radius-sm)',
                 padding: '1px 6px',
               }}
             >
@@ -1435,7 +1435,7 @@ function FixTheRecord({
               color: 'var(--danger-700)',
               background: 'var(--danger-050)',
               border: '1px solid var(--danger-500)',
-              borderRadius: 6,
+              borderRadius: 'var(--radius-sm)',
               padding: '9px 11px',
               lineHeight: '18px',
             }}
@@ -1451,7 +1451,7 @@ function FixTheRecord({
               color: 'var(--success-700)',
               background: 'var(--success-050)',
               border: '1px solid var(--success-400)',
-              borderRadius: 6,
+              borderRadius: 'var(--radius-sm)',
               padding: '10px 12px',
               lineHeight: '19px',
             }}
@@ -1483,10 +1483,10 @@ function FixTheRecord({
             title={plan?.reason}
             style={{
               height: 38,
-              borderRadius: 4,
+              borderRadius: 'var(--radius-sm)',
               border: `1px solid ${applied ? 'var(--border-default)' : 'var(--warning-500)'}`,
               background: applied ? 'var(--ink-050)' : 'var(--warning-500)',
-              color: applied ? 'var(--ink-500)' : '#fff',
+              color: applied ? 'var(--ink-500)' : 'var(--surface-card)',
               fontWeight: 600,
               fontSize: 13,
               cursor: busy || applied ? 'not-allowed' : 'pointer',

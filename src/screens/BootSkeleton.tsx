@@ -32,9 +32,9 @@ export function BootSkeleton({ label = 'Loading calls from the CMMS connector…
           <div
             key={i}
             style={{
-              background: '#fff',
+              background: 'var(--surface-card)',
               border: '1px solid var(--border-default)',
-              borderRadius: 8,
+              borderRadius: 'var(--radius-lg)',
               padding: 16,
             }}
           >
@@ -47,9 +47,9 @@ export function BootSkeleton({ label = 'Loading calls from the CMMS connector…
 
       <div
         style={{
-          background: '#fff',
+          background: 'var(--surface-card)',
           border: '1px solid var(--border-default)',
-          borderRadius: 8,
+          borderRadius: 'var(--radius-lg)',
           marginTop: 20,
           overflow: 'hidden',
         }}
@@ -83,8 +83,8 @@ export function BootSkeleton({ label = 'Loading calls from the CMMS connector…
             <div className="skq" style={{ height: 10 }} />
             <div className="skq" style={{ height: 10 }} />
             <div className="skq" style={{ height: 10 }} />
-            <div className="skq" style={{ height: 18, borderRadius: 999 }} />
-            <div className="skq" style={{ height: 18, borderRadius: 999 }} />
+            <div className="skq" style={{ height: 18, borderRadius: 'var(--radius-pill)' }} />
+            <div className="skq" style={{ height: 18, borderRadius: 'var(--radius-pill)' }} />
             <div className="skq" style={{ height: 10 }} />
           </div>
         ))}

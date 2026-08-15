@@ -5,9 +5,9 @@ export function Panel({ children, style }: { children: ReactNode; style?: React.
   return (
     <div
       style={{
-        background: '#fff',
+        background: 'var(--surface-card)',
         border: '1px solid var(--border-default)',
-        borderRadius: 8,
+        borderRadius: 'var(--radius-lg)',
         overflow: 'hidden',
         ...style,
       }}
@@ -48,7 +48,7 @@ export function Pill({
         fontSize: 11,
         fontWeight: 600,
         padding: '2px 8px',
-        borderRadius: 999,
+        borderRadius: 'var(--radius-pill)',
         background: bg,
         color: fg,
         justifySelf: 'start',
@@ -89,10 +89,10 @@ export function Button({
       style={{
         height: 38,
         padding: '0 16px',
-        borderRadius: 4,
+        borderRadius: 'var(--radius-sm)',
         border: `1px solid ${primary && !disabled ? 'var(--blue-500)' : 'var(--border-default)'}`,
-        background: disabled ? 'var(--ink-050)' : primary ? 'var(--blue-500)' : '#fff',
-        color: disabled ? 'var(--ink-500)' : primary ? '#fff' : 'var(--ink-900)',
+        background: disabled ? 'var(--ink-050)' : primary ? 'var(--blue-500)' : 'var(--surface-card)',
+        color: disabled ? 'var(--ink-500)' : primary ? 'var(--surface-card)' : 'var(--ink-900)',
         fontWeight: 500,
         fontSize: 13,
         cursor: disabled ? 'not-allowed' : 'pointer',

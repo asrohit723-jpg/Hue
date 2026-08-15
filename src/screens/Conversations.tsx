@@ -359,7 +359,7 @@ export function Conversations({
             flexWrap: 'wrap',
             marginTop: 12,
             padding: '9px 14px',
-            borderRadius: 6,
+            borderRadius: 'var(--radius-sm)',
             background: sync.reachable ? 'var(--blue-025)' : 'var(--warning-050)',
             border: `1px solid ${sync.reachable ? 'var(--blue-100)' : 'var(--warning-500)'}`,
             fontSize: 12,
@@ -415,9 +415,9 @@ export function Conversations({
 
       <div
         style={{
-          background: '#fff',
+          background: 'var(--surface-card)',
           border: '1px solid var(--border-default)',
-          borderRadius: 8,
+          borderRadius: 'var(--radius-lg)',
           marginTop: 12,
           overflow: 'hidden',
         }}
@@ -457,9 +457,9 @@ export function Conversations({
               style={{
                 height: 38,
                 padding: '0 16px',
-                borderRadius: 4,
+                borderRadius: 'var(--radius-sm)',
                 border: '1px solid var(--border-default)',
-                background: '#fff',
+                background: 'var(--surface-card)',
                 fontWeight: 500,
                 fontSize: 13,
                 cursor: 'pointer',
@@ -501,7 +501,7 @@ function CallRow({ c, onOpen }: { c: ConversationView; onOpen: () => void }) {
         padding: '12px 16px',
         borderBottom: '1px solid var(--ink-100)',
         cursor: 'pointer',
-        background: '#fff',
+        background: 'var(--surface-card)',
       }}
     >
       {/* The RESULT, and only the result. Where a call is in grading belongs
@@ -521,7 +521,7 @@ function CallRow({ c, onOpen }: { c: ConversationView; onOpen: () => void }) {
         }}
       >
         <span
-          style={{ width: 7, height: 7, borderRadius: 999, background: ev.fg, flex: '0 0 7px' }}
+          style={{ width: 7, height: 7, borderRadius: 'var(--radius-pill)', background: ev.fg, flex: '0 0 7px' }}
         />
         {c.evalStatus === 'not_evaluated' ? 'Awaiting grading' : label(c.evalStatus)}
       </span>
@@ -532,9 +532,9 @@ function CallRow({ c, onOpen }: { c: ConversationView; onOpen: () => void }) {
             width: 32,
             height: 32,
             flex: '0 0 32px',
-            borderRadius: 999,
+            borderRadius: 'var(--radius-pill)',
             background: avatarBg,
-            color: '#fff',
+            color: 'var(--surface-card)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -558,7 +558,7 @@ function CallRow({ c, onOpen }: { c: ConversationView; onOpen: () => void }) {
                 letterSpacing: '.03em',
                 textTransform: 'uppercase',
                 padding: '1px 6px',
-                borderRadius: 4,
+                borderRadius: 'var(--radius-sm)',
                 background: ct.bg,
                 color: ct.fg,
               }}
@@ -583,7 +583,7 @@ function CallRow({ c, onOpen }: { c: ConversationView; onOpen: () => void }) {
           fontSize: 11,
           fontWeight: 600,
           padding: '2px 8px',
-          borderRadius: 999,
+          borderRadius: 'var(--radius-pill)',
           justifySelf: 'start',
           whiteSpace: 'nowrap',
           fontVariantNumeric: 'tabular-nums',
@@ -599,7 +599,7 @@ function CallRow({ c, onOpen }: { c: ConversationView; onOpen: () => void }) {
           fontSize: 11,
           fontWeight: 600,
           padding: '2px 8px',
-          borderRadius: 999,
+          borderRadius: 'var(--radius-pill)',
           background: sent.bg,
           color: sent.fg,
           justifySelf: 'start',

@@ -4,9 +4,9 @@ export function ErrorState({ message, onRetry }: { message: string; onRetry: () 
     <div style={{ padding: '40px 32px', maxWidth: 640 }}>
       <div
         style={{
-          background: '#fff',
+          background: 'var(--surface-card)',
           border: '1px solid var(--danger-500)',
-          borderRadius: 8,
+          borderRadius: 'var(--radius-lg)',
           padding: 24,
         }}
       >
@@ -29,7 +29,7 @@ export function ErrorState({ message, onRetry }: { message: string; onRetry: () 
           style={{
             marginTop: 14,
             background: 'var(--ink-050)',
-            borderRadius: 6,
+            borderRadius: 'var(--radius-sm)',
             padding: '12px 14px',
             fontSize: 12,
             color: 'var(--ink-600)',
@@ -49,10 +49,10 @@ export function ErrorState({ message, onRetry }: { message: string; onRetry: () 
             style={{
               height: 38,
               padding: '0 16px',
-              borderRadius: 4,
+              borderRadius: 'var(--radius-sm)',
               border: '1px solid var(--blue-500)',
               background: 'var(--blue-500)',
-              color: '#fff',
+              color: 'var(--surface-card)',
               fontWeight: 500,
               fontSize: 13,
               cursor: 'pointer',

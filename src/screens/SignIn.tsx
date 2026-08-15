@@ -57,12 +57,12 @@ export function SignIn({ onSignIn, error }: { onSignIn: () => void; error?: stri
                 style={{
                   width: 30,
                   height: 30,
-                  borderRadius: 6,
+                  borderRadius: 'var(--radius-sm)',
                   background: 'var(--brand-indigo)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  color: '#fff',
+                  color: 'var(--surface-card)',
                   fontWeight: 700,
                   fontSize: 14,
                 }}
@@ -100,7 +100,7 @@ export function SignIn({ onSignIn, error }: { onSignIn: () => void; error?: stri
                     alignItems: 'flex-start',
                     background: 'var(--danger-050)',
                     border: '1px solid var(--danger-500)',
-                    borderRadius: 6,
+                    borderRadius: 'var(--radius-sm)',
                     padding: '10px 12px',
                   }}
                 >
@@ -129,10 +129,10 @@ export function SignIn({ onSignIn, error }: { onSignIn: () => void; error?: stri
                 onClick={onSignIn}
                 style={{
                   height: 44,
-                  borderRadius: 4,
+                  borderRadius: 'var(--radius-sm)',
                   border: '1px solid var(--blue-500)',
                   background: 'var(--blue-500)',
-                  color: '#fff',
+                  color: 'var(--surface-card)',
                   fontWeight: 500,
                   fontSize: 14,
                   cursor: 'pointer',
@@ -163,7 +163,7 @@ export function SignIn({ onSignIn, error }: { onSignIn: () => void; error?: stri
           style={{
             flex: '0 0 44%',
             maxWidth: 560,
-            background: '#fff',
+            background: 'var(--surface-card)',
             borderLeft: '1px solid var(--border-default)',
             padding: '56px 48px',
             display: 'flex',
@@ -202,7 +202,7 @@ export function SignIn({ onSignIn, error }: { onSignIn: () => void; error?: stri
                     width: 24,
                     height: 24,
                     flex: '0 0 24px',
-                    borderRadius: 999,
+                    borderRadius: 'var(--radius-pill)',
                     background: 'var(--blue-050)',
                     color: 'var(--blue-600)',
                     display: 'flex',

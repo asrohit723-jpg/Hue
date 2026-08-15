@@ -56,10 +56,10 @@ const microLabel: React.CSSProperties = {
 const selectStyle: React.CSSProperties = {
   height: 32,
   border: '1px solid var(--border-default)',
-  borderRadius: 6,
+  borderRadius: 'var(--radius-sm)',
   padding: '0 28px 0 8px',
   fontSize: 13,
-  backgroundColor: '#fff',
+  backgroundColor: 'var(--surface-card)',
   backgroundImage:
     "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23283648' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E\")",
   backgroundRepeat: 'no-repeat',
@@ -335,7 +335,7 @@ export function ScopeEvals({ search = '' }: { search?: string }) {
           style={{
             background: 'var(--warning-050)',
             border: '1px solid var(--warning-500)',
-            borderRadius: 6,
+            borderRadius: 'var(--radius-sm)',
             padding: '10px 14px',
             marginBottom: 16,
             fontSize: 13,
@@ -369,9 +369,9 @@ export function ScopeEvals({ search = '' }: { search?: string }) {
         {/* coverage */}
         <div
           style={{
-            background: '#fff',
+            background: 'var(--surface-card)',
             border: '1px solid var(--border-default)',
-            borderRadius: 8,
+            borderRadius: 'var(--radius-lg)',
             padding: '12px 16px',
             minWidth: 260,
           }}
@@ -395,7 +395,7 @@ export function ScopeEvals({ search = '' }: { search?: string }) {
           <div
             style={{
               height: 6,
-              borderRadius: 999,
+              borderRadius: 'var(--radius-pill)',
               background: 'var(--ink-200)',
               marginTop: 8,
               overflow: 'hidden',
@@ -425,9 +425,9 @@ export function ScopeEvals({ search = '' }: { search?: string }) {
       {/* ---- scope of work document ---- */}
       <div
         style={{
-          background: '#fff',
+          background: 'var(--surface-card)',
           border: '1px solid var(--border-default)',
-          borderRadius: 8,
+          borderRadius: 'var(--radius-lg)',
           marginTop: 20,
         }}
       >
@@ -447,7 +447,7 @@ export function ScopeEvals({ search = '' }: { search?: string }) {
                 width: 34,
                 height: 34,
                 flex: '0 0 34px',
-                borderRadius: 8,
+                borderRadius: 'var(--radius-lg)',
                 background: 'var(--blue-025)',
                 display: 'flex',
                 alignItems: 'center',
@@ -486,7 +486,7 @@ export function ScopeEvals({ search = '' }: { search?: string }) {
                   }}
                 >
                   <span
-                    style={{ width: 5, height: 5, borderRadius: 999, background: 'var(--ink-400)' }}
+                    style={{ width: 5, height: 5, borderRadius: 'var(--radius-pill)', background: 'var(--ink-400)' }}
                   />
                   {criteria.length} evals derived
                 </span>
@@ -508,10 +508,10 @@ export function ScopeEvals({ search = '' }: { search?: string }) {
               style={{
                 height: 34,
                 padding: '0 14px',
-                borderRadius: 4,
+                borderRadius: 'var(--radius-sm)',
                 border: '1px solid var(--blue-500)',
                 background: 'var(--blue-500)',
-                color: '#fff',
+                color: 'var(--surface-card)',
                 fontWeight: 500,
                 fontSize: 13,
                 cursor: 'pointer',
@@ -537,7 +537,7 @@ export function ScopeEvals({ search = '' }: { search?: string }) {
                 minHeight: 300,
                 resize: 'vertical',
                 border: '1px solid var(--border-default)',
-                borderRadius: 6,
+                borderRadius: 'var(--radius-sm)',
                 padding: '14px 16px',
                 fontFamily: 'var(--font-sans)',
                 fontSize: 14,
@@ -560,11 +560,11 @@ export function ScopeEvals({ search = '' }: { search?: string }) {
                 style={{
                   height: 36,
                   padding: '0 16px',
-                  borderRadius: 4,
+                  borderRadius: 'var(--radius-sm)',
                   border: `1px solid ${sowBusy || draft.trim().length < 40 ? 'var(--border-default)' : 'var(--blue-500)'}`,
                   background:
                     sowBusy || draft.trim().length < 40 ? 'var(--ink-100)' : 'var(--blue-500)',
-                  color: sowBusy || draft.trim().length < 40 ? 'var(--ink-400)' : '#fff',
+                  color: sowBusy || draft.trim().length < 40 ? 'var(--ink-400)' : 'var(--surface-card)',
                   fontWeight: 500,
                   fontSize: 13,
                   cursor: sowBusy ? 'progress' : draft.trim().length < 40 ? 'not-allowed' : 'pointer',
@@ -584,9 +584,9 @@ export function ScopeEvals({ search = '' }: { search?: string }) {
                 style={{
                   height: 36,
                   padding: '0 14px',
-                  borderRadius: 4,
+                  borderRadius: 'var(--radius-sm)',
                   border: '1px solid var(--border-default)',
-                  background: '#fff',
+                  background: 'var(--surface-card)',
                   fontWeight: 500,
                   fontSize: 13,
                   cursor: 'pointer',
@@ -686,7 +686,7 @@ export function ScopeEvals({ search = '' }: { search?: string }) {
                     key={v.id}
                     style={{
                       padding: '9px 10px',
-                      borderRadius: 6,
+                      borderRadius: 'var(--radius-sm)',
                       background: v.isCurrent ? 'var(--blue-025)' : 'transparent',
                       borderLeft: `2px solid ${v.isCurrent ? 'var(--blue-500)' : 'var(--ink-100)'}`,
                     }}
@@ -748,9 +748,9 @@ export function ScopeEvals({ search = '' }: { search?: string }) {
            invented field. */}
       <div
         style={{
-          background: '#fff',
+          background: 'var(--surface-card)',
           border: '1px solid var(--border-default)',
-          borderRadius: 8,
+          borderRadius: 'var(--radius-lg)',
           marginTop: 16,
           overflow: 'hidden',
         }}
@@ -790,10 +790,10 @@ export function ScopeEvals({ search = '' }: { search?: string }) {
             onClick={() => setCreating((v) => !v)}
             aria-expanded={creating}
             style={{
-              height: 32, padding: '0 14px', borderRadius: 6,
+              height: 32, padding: '0 14px', borderRadius: 'var(--radius-sm)',
               border: '1px solid var(--blue-500)',
-              background: creating ? '#fff' : 'var(--blue-500)',
-              color: creating ? 'var(--blue-600)' : '#fff',
+              background: creating ? 'var(--surface-card)' : 'var(--blue-500)',
+              color: creating ? 'var(--blue-600)' : 'var(--surface-card)',
               fontWeight: 500, fontSize: 13, cursor: 'pointer',
             }}
           >
@@ -892,7 +892,7 @@ function EvalCard({ e }: { e: UnifiedEval }) {
           <span
             style={{
               fontSize: 10, fontWeight: 600, letterSpacing: '.03em', textTransform: 'uppercase',
-              padding: '1px 7px', borderRadius: 4, background: originTone.bg, color: originTone.fg,
+              padding: '1px 7px', borderRadius: 'var(--radius-sm)', background: originTone.bg, color: originTone.fg,
             }}
           >
             {originTone.label}
@@ -935,9 +935,9 @@ function EvalCard({ e }: { e: UnifiedEval }) {
         <span
           style={{
             fontSize: 10, fontWeight: 600, letterSpacing: '.03em', textTransform: 'uppercase',
-            padding: '1px 7px', borderRadius: 4, whiteSpace: 'nowrap',
-            background: e.wired ? 'var(--success-050)' : 'var(--ink-050)',
-            color: e.wired ? 'var(--success-700)' : 'var(--ink-600)',
+            padding: '1px 7px', borderRadius: 'var(--radius-sm)', whiteSpace: 'nowrap',
+            background: e.wired ? 'var(--badge-pass-bg)' : 'var(--badge-neutral-bg)',
+            color: e.wired ? 'var(--badge-pass-fg)' : 'var(--badge-neutral-fg)',
           }}
         >
           {e.wired ? 'Active' : 'Not wired'}
@@ -985,7 +985,7 @@ function NewEval({
 
   const ready = Boolean(title.trim() && passDefinition.trim() && failDefinition.trim());
   const field: React.CSSProperties = {
-    width: '100%', border: '1px solid var(--border-default)', borderRadius: 6,
+    width: '100%', border: '1px solid var(--border-default)', borderRadius: 'var(--radius-sm)',
     padding: '8px 10px', fontSize: 13, fontFamily: 'var(--font-sans)', outline: 'none',
     boxSizing: 'border-box', color: 'var(--ink-900)',
   };
@@ -995,7 +995,7 @@ function NewEval({
   };
 
   return (
-    <div style={{ background: '#fff', borderBottom: '2px solid var(--blue-500)' }}>
+    <div style={{ background: 'var(--surface-card)', borderBottom: '2px solid var(--blue-500)' }}>
       <div style={{ padding: '13px 20px', background: 'var(--blue-025)', borderBottom: '1px solid var(--blue-100)' }}>
         <h3 style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>New eval</h3>
         <div style={{ fontSize: 12, color: 'var(--ink-600)', marginTop: 2 }}>
@@ -1063,14 +1063,14 @@ function NewEval({
 
         {/* Said before saving, not discovered afterwards. */}
         {layer === 'deterministic' && (
-          <div style={{ fontSize: 12, color: 'var(--warning-700)', background: 'var(--warning-050)', borderRadius: 6, padding: '8px 11px', lineHeight: '18px' }}>
+          <div style={{ fontSize: 12, color: 'var(--warning-700)', background: 'var(--warning-050)', borderRadius: 'var(--radius-sm)', padding: '8px 11px', lineHeight: '18px' }}>
             A deterministic eval has no code behind it, so nothing will run it. It is stored and shown
             as “Not wired” rather than reported as a criterion your calls passed.
           </div>
         )}
 
         {error && (
-          <div style={{ fontSize: 12, color: 'var(--danger-700)', background: 'var(--danger-050)', borderRadius: 6, padding: '8px 11px' }}>
+          <div style={{ fontSize: 12, color: 'var(--danger-700)', background: 'var(--danger-050)', borderRadius: 'var(--radius-sm)', padding: '8px 11px' }}>
             {error}
           </div>
         )}
@@ -1081,10 +1081,10 @@ function NewEval({
             disabled={!ready || busy}
             onClick={() => onSave({ title, description, passDefinition, failDefinition, severity, layer, modality })}
             style={{
-              height: 36, padding: '0 16px', borderRadius: 6,
+              height: 36, padding: '0 16px', borderRadius: 'var(--radius-sm)',
               border: `1px solid ${ready && !busy ? 'var(--blue-500)' : 'var(--border-default)'}`,
               background: ready && !busy ? 'var(--blue-500)' : 'var(--ink-100)',
-              color: ready && !busy ? '#fff' : 'var(--ink-400)',
+              color: ready && !busy ? 'var(--surface-card)' : 'var(--ink-400)',
               fontWeight: 500, fontSize: 13, cursor: ready && !busy ? 'pointer' : 'not-allowed',
               display: 'inline-flex', alignItems: 'center', gap: 8,
             }}
@@ -1092,7 +1092,7 @@ function NewEval({
             {busy ? <span className="hue-spinner" aria-hidden="true" /> : null}
             {busy ? 'Saving…' : 'Add eval'}
           </button>
-          <button className="hue-btn" onClick={onCancel} disabled={busy} style={{ height: 36, padding: '0 14px', borderRadius: 6, border: '1px solid var(--border-default)', background: '#fff', fontWeight: 500, fontSize: 13, cursor: 'pointer' }}>
+          <button className="hue-btn" onClick={onCancel} disabled={busy} style={{ height: 36, padding: '0 14px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-default)', background: 'var(--surface-card)', fontWeight: 500, fontSize: 13, cursor: 'pointer' }}>
             Cancel
           </button>
           <span style={{ fontSize: 12, color: 'var(--ink-500)' }}>

@@ -49,7 +49,7 @@ export function FirstRun({ sites }: { sites: string[] }) {
             textTransform: 'uppercase',
             color: 'var(--brand-indigo)',
             background: 'var(--brand-indigo-050)',
-            borderRadius: 999,
+            borderRadius: 'var(--radius-pill)',
             padding: '3px 9px',
           }}
         >
@@ -65,9 +65,9 @@ export function FirstRun({ sites }: { sites: string[] }) {
 
         <div
           style={{
-            background: '#fff',
+            background: 'var(--surface-card)',
             border: '1px solid var(--border-default)',
-            borderRadius: 8,
+            borderRadius: 'var(--radius-lg)',
             marginTop: 24,
             overflow: 'hidden',
           }}
@@ -88,7 +88,7 @@ export function FirstRun({ sites }: { sites: string[] }) {
                   width: 26,
                   height: 26,
                   flex: '0 0 26px',
-                  borderRadius: 999,
+                  borderRadius: 'var(--radius-pill)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -112,7 +112,7 @@ export function FirstRun({ sites }: { sites: string[] }) {
                       textTransform: 'uppercase',
                       color: s.done ? 'var(--success-700)' : 'var(--ink-500)',
                       background: s.done ? 'var(--success-050)' : 'var(--ink-050)',
-                      borderRadius: 999,
+                      borderRadius: 'var(--radius-pill)',
                       padding: '2px 8px',
                     }}
                   >
@@ -128,10 +128,10 @@ export function FirstRun({ sites }: { sites: string[] }) {
                 style={{
                   height: 36,
                   padding: '0 14px',
-                  borderRadius: 4,
+                  borderRadius: 'var(--radius-sm)',
                   border: `1px solid ${s.done ? 'var(--border-default)' : 'var(--blue-500)'}`,
-                  background: s.done ? '#fff' : 'var(--blue-500)',
-                  color: s.done ? 'var(--ink-500)' : '#fff',
+                  background: s.done ? 'var(--surface-card)' : 'var(--blue-500)',
+                  color: s.done ? 'var(--ink-500)' : 'var(--surface-card)',
                   fontWeight: 500,
                   fontSize: 13,
                   cursor: s.done ? 'default' : 'pointer',
