@@ -14,6 +14,21 @@ import { useEffect, useRef, useState } from 'react';
  * picking one closes the list, picking several does not.
  */
 
+/**
+ * Which filter popover is open, app-wide.
+ *
+ * Each control owned its own `open`, so two could be open at once — on
+ * Overview the range and site popovers overlapped each other. A module-level
+ * id plus a subscriber list keeps exactly one open without lifting state into
+ * every screen that happens to render a filter.
+ */
+let openId: string | null = null;
+const listeners = new Set<() => void>();
+function setOpenId(id: string | null) {
+  openId = id;
+  listeners.forEach((fn) => fn());
+}
+
 export interface FilterOption {
   value: string;
   label: string;
@@ -57,8 +72,24 @@ export function FilterSelect({
   /** What "nothing selected" reads as. Defaults to the label. */
   allLabel?: string;
 }) {
-  const [open, setOpen] = useState(false);
+  const id = useRef(`filter-${Math.random().toString(36).slice(2)}`).current;
+  const [, force] = useState(0);
+  const open = openId === id;
+  const setOpen = (next: boolean | ((v: boolean) => boolean)) => {
+    const want = typeof next === 'function' ? next(open) : next;
+    setOpenId(want ? id : null);
+  };
   const box = useRef<HTMLDivElement | null>(null);
+
+  // Re-render this control when ANOTHER one opens, so the one that was open
+  // actually closes rather than just losing its turn.
+  useEffect(() => {
+    const fn = () => force((n) => n + 1);
+    listeners.add(fn);
+    return () => {
+      listeners.delete(fn);
+    };
+  }, []);
 
   // Close on an outside click or Escape. A popover that can only be dismissed
   // by choosing something is a trap when you opened it to look.

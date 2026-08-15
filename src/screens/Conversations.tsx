@@ -26,7 +26,6 @@ import { page } from '../lib/layout';
 const FILTERS = ['All calls', 'Flagged', 'Passed', 'No SR created'] as const;
 type Filter = (typeof FILTERS)[number];
 
-const COLS = '104px minmax(240px,2fr) 130px 104px 74px 24px';
 
 const headCell: React.CSSProperties = {
   fontSize: 11,
@@ -423,28 +422,55 @@ export function Conversations({
         }}
       >
         <div style={{ overflowX: 'auto' }}>
-          <div
+          {/* A real table, with the widths owned by the COLUMN.
+              Every row used to be its own independent grid, so one long
+              unbreakable cell widened that row's tracks alone and the columns
+              stopped lining up between rows — the jump on filtering. With
+              table-layout fixed, a cell's content cannot move a column. */}
+          <table
             style={{
-              display: 'grid',
+              width: '100%',
               minWidth: 880,
-              gridTemplateColumns: COLS,
-              gap: 14,
-              padding: '9px 16px',
-              background: 'var(--ink-050)',
-              borderBottom: '1px solid var(--border-default)',
-              ...headCell,
+              borderCollapse: 'collapse',
+              tableLayout: 'fixed',
             }}
           >
-            <span>Result</span>
-            <span>Caller</span>
-            <span>Outcome</span>
-            <span>Sentiment</span>
-            <span>Time</span>
-            <span />
-          </div>
-          {rows.map((c) => (
-            <CallRow key={c.id} c={c} onOpen={() => onOpen(c.id)} />
-          ))}
+            <colgroup>
+              <col style={{ width: '13%' }} />
+              <col style={{ width: '34%' }} />
+              <col style={{ width: '17%' }} />
+              <col style={{ width: '14%' }} />
+              <col style={{ width: '12%' }} />
+              <col style={{ width: '10%' }} />
+            </colgroup>
+            <thead>
+              <tr>
+                {['Result', 'Caller', 'Outcome', 'Sentiment', 'Time', ''].map((h, i) => (
+                  <th
+                    key={i}
+                    scope="col"
+                    style={{
+                      ...headCell,
+                      position: 'sticky',
+                      top: 0,
+                      zIndex: 1,
+                      textAlign: 'left',
+                      padding: '9px 16px',
+                      background: 'var(--surface-sunken)',
+                      borderBottom: '1px solid var(--border-default)',
+                    }}
+                  >
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((c) => (
+                <CallRow key={c.id} c={c} onOpen={() => onOpen(c.id)} />
+              ))}
+            </tbody>
+          </table>
         </div>
         {rows.length === 0 && (
           <div style={{ padding: '44px 24px', textAlign: 'center' }}>
@@ -487,7 +513,7 @@ function CallRow({ c, onOpen }: { c: ConversationView; onOpen: () => void }) {
   const avatarBg = 'var(--ink-100)';
 
   return (
-    <div
+    <tr
       onClick={onOpen}
       className="hue-row"
       onKeyDown={(e) => {
@@ -495,13 +521,6 @@ function CallRow({ c, onOpen }: { c: ConversationView; onOpen: () => void }) {
       }}
       tabIndex={0}
       style={{
-        display: 'grid',
-        minWidth: 880,
-        gridTemplateColumns: COLS,
-        gap: 14,
-        alignItems: 'center',
-        padding: '12px 16px',
-        borderBottom: '1px solid var(--ink-100)',
         cursor: 'pointer',
         background: 'var(--surface-card)',
       }}
@@ -510,6 +529,7 @@ function CallRow({ c, onOpen }: { c: ConversationView; onOpen: () => void }) {
           on the record itself, not on every row of the list — the stage is
           transient and the list is for scanning outcomes. The poll above still
           refreshes this cell the moment a call finishes grading. */}
+      <td style={{ padding: '12px 16px', borderBottom: '1px solid var(--ink-100)', verticalAlign: 'middle' }}>
       <span
         style={{
           display: 'flex',
@@ -527,7 +547,9 @@ function CallRow({ c, onOpen }: { c: ConversationView; onOpen: () => void }) {
         />
         {c.evalStatus === 'not_evaluated' ? 'Awaiting grading' : label(c.evalStatus)}
       </span>
+      </td>
 
+      <td style={{ padding: '12px 16px', borderBottom: '1px solid var(--ink-100)', verticalAlign: 'middle' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 11, minWidth: 0 }}>
         <span
           style={{
@@ -548,7 +570,12 @@ function CallRow({ c, onOpen }: { c: ConversationView; onOpen: () => void }) {
         </span>
         <div style={{ minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
-            <span style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{name}</span>
+            <span
+              style={{ fontWeight: 600, ...truncate, minWidth: 0 }}
+              title={name}
+            >
+              {name}
+            </span>
             {/* How it arrived. Shown on every row, not only the unusual ones —
                 a channel that appears only sometimes reads as an exception
                 rather than as a fact about every conversation. */}
@@ -573,13 +600,27 @@ function CallRow({ c, onOpen }: { c: ConversationView; onOpen: () => void }) {
           </div>
           <div
             title={c.snippet ?? ''}
-            style={{ fontSize: 12, color: 'var(--ink-600)', marginTop: 2, ...truncate }}
+            style={{
+              fontSize: 12,
+              color: 'var(--ink-600)',
+              marginTop: 2,
+              // Exactly two lines, so row heights do not vary with how much the
+              // caller said. `truncate` cut a single line mid-word with no
+              // ellipsis to show it had been cut.
+              display: '-webkit-box',
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: 'vertical',
+              overflow: 'hidden',
+              lineHeight: '16px',
+            }}
           >
             {c.snippet ?? 'No caller turn recorded'}
           </div>
         </div>
       </div>
+      </td>
 
+      <td style={{ padding: '12px 16px', borderBottom: '1px solid var(--ink-100)', verticalAlign: 'middle' }}>
       <span
         style={{
           fontSize: 11,
@@ -595,7 +636,9 @@ function CallRow({ c, onOpen }: { c: ConversationView; onOpen: () => void }) {
       >
         {c.srRecordId ? `SR ${c.srRecordId}` : 'No SR created'}
       </span>
+      </td>
 
+      <td style={{ padding: '12px 16px', borderBottom: '1px solid var(--ink-100)', verticalAlign: 'middle' }}>
       <span
         style={{
           fontSize: 11,
@@ -610,7 +653,9 @@ function CallRow({ c, onOpen }: { c: ConversationView; onOpen: () => void }) {
       >
         {c.sentiment ? label(c.sentiment) : 'Unknown'}
       </span>
+      </td>
 
+      <td style={{ padding: '12px 16px', borderBottom: '1px solid var(--ink-100)', verticalAlign: 'middle' }}>
       <div>
         <div style={{ fontSize: 13, fontVariantNumeric: 'tabular-nums' }}>{clock(c.startedAt)}</div>
         <div
@@ -619,7 +664,9 @@ function CallRow({ c, onOpen }: { c: ConversationView; onOpen: () => void }) {
           {duration(c.durationSec)}
         </div>
       </div>
+      </td>
 
+      <td style={{ padding: '12px 16px', borderBottom: '1px solid var(--ink-100)', verticalAlign: 'middle' }}>
       <svg
         width="16"
         height="16"
@@ -632,6 +679,7 @@ function CallRow({ c, onOpen }: { c: ConversationView; onOpen: () => void }) {
       >
         <path d="m9 18 6-6-6-6" />
       </svg>
-    </div>
+      </td>
+    </tr>
   );
 }
