@@ -8,7 +8,7 @@ import {
 } from '../lib/vibe';
 import { runSemanticCriterion, runCallAnalysis, SEMANTIC_CRITERIA, type CallAnalysis } from '../lib/judges';
 import { BootSkeleton } from './BootSkeleton';
-import { LoadError } from '../components/Chrome';
+import { BackLink, LoadError } from '../components/Chrome';
 import criteriaSeed from '../../evals/criteria.seed.json';
 import { WIRED_CRITERIA, layerOf } from '../lib/criteria';
 
@@ -438,41 +438,7 @@ export function ConversationDetail({
           marginBottom: 14,
         }}
       >
-        <button
-          className="hue-btn"
-          onClick={onBack}
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 7,
-            height: 32,
-            padding: '0 12px 0 10px',
-            borderRadius: 'var(--radius-sm)',
-            border: '1px solid var(--border-default)',
-            background: 'var(--surface-card)',
-            color: 'var(--ink-900)',
-            fontSize: 13,
-            fontWeight: 500,
-            cursor: 'pointer',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.9"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-          >
-            <line x1="19" y1="12" x2="5" y2="12" />
-            <polyline points="12 19 5 12 12 5" />
-          </svg>
-          Back to conversations
-        </button>
+        <BackLink onClick={onBack}>Back to conversations</BackLink>
         <span style={{ color: 'var(--ink-500)' }}>{c.callId}</span>
       </div>
 

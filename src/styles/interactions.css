@@ -71,6 +71,42 @@
   }
 }
 
+/* ---------- The back control on a detail screen ----------
+   Ghost, so it does not compete with the buttons that change something. It
+   carries no background of its own, which is exactly why .hue-btn is wrong for
+   it: brightness() on a transparent fill has nothing to darken. The tint
+   arrives on hover instead, from the same --ink-050 every row hover uses.
+
+   The arrow slides 2px the way it is about to take you. Small, and it is the
+   only thing that makes the control feel like a direction rather than a word. */
+.hue-back {
+  transition:
+    background-color var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard);
+}
+
+.hue-back svg {
+  transition: transform var(--dur-fast) var(--ease-standard);
+}
+
+.hue-back:hover {
+  background-color: var(--ink-050) !important;
+  color: var(--ink-900) !important;
+}
+
+.hue-back:hover svg {
+  transform: translateX(-2px);
+}
+
+.hue-back:active {
+  background-color: var(--ink-100) !important;
+}
+
+.hue-back:focus-visible {
+  outline: 2px solid var(--blue-500);
+  outline-offset: 2px;
+}
+
 /* ---------- Clickable rows, cards and list items ---------- */
 
 .hue-row {
@@ -235,12 +271,20 @@
   .hue-field,
   .hue-tab,
   .hue-link,
-  .hue-rail {
+  .hue-rail,
+  .hue-back,
+  .hue-back svg {
     transition-duration: 1ms;
   }
 
   .hue-btn:active:not(:disabled),
   .hue-card-click:active {
+    transform: none;
+  }
+
+  /* The colour still changes, so the control is still visibly reacting — only
+     the slide goes. */
+  .hue-back:hover svg {
     transform: none;
   }
 

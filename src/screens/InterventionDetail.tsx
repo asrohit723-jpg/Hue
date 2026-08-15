@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, vibe, type ConversationView, type DeviationWithEvidence } from '../lib/vibe';
 import { BootSkeleton } from './BootSkeleton';
-import { LoadError } from '../components/Chrome';
+import { BackLink, LoadError } from '../components/Chrome';
 import { clock, duration, label, rootCauseTone, sentimentTone, severityTone } from '../lib/tone';
 import criteriaSeed from '../../evals/criteria.seed.json';
 import { page } from '../lib/layout';
@@ -367,11 +367,11 @@ export function InterventionDetail({
           marginBottom: 14,
         }}
       >
-        <span onClick={onBack} className="hue-link" role="button" tabIndex={0} style={{ cursor: 'pointer', color: 'var(--blue-500)', fontWeight: 500 }}>
-          Interventions
-        </span>
-        <span>/</span>
-        <span>{dev.id}</span>
+        {/* The same control Conversation detail uses, going to the other list.
+            It replaces a breadcrumb whose only link went here anyway — a button
+            beside that link would have been two ways back in one row. */}
+        <BackLink onClick={onBack}>Back to interventions</BackLink>
+        <span style={{ color: 'var(--ink-500)' }}>{dev.id}</span>
       </div>
 
       {/* header */}
@@ -740,10 +740,15 @@ export function InterventionDetail({
         hint="Two independent actions — approve the fix, repair the record"
       />
 
+      {/* One column, full width, one after the other. Side by side, the agent
+          fix — which carries a two-pane diff — was squeezed into 1.5fr while
+          the record fix sat in 1fr with air to spare, and the two read as a
+          choice between them. They are not: the hint above says two
+          independent actions, and stacking them says the same thing. */}
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'minmax(0,1.5fr) minmax(0,1fr)',
+          gridTemplateColumns: 'minmax(0,1fr)',
           gap: 16,
           alignItems: 'start',
         }}
@@ -1012,10 +1017,15 @@ function FixTheAgent({
                   agent's live configuration; the rest are the scope of work
                   standing in for it, and saying so is the difference between a
                   stand-in and a claim. */}
+              {/* `reference` is set whenever a stored scope of work was read,
+                  whether or not the clause turned up in it. Keying off `text`
+                  said "not available" for a clause that is simply not in a
+                  document Hue read perfectly well — two different facts, and
+                  only one of them is a failure to read anything. */}
               Current —{' '}
               {currentClause?.source === 'agent_prompt'
                 ? `agent prompt ${currentClause.clauseRef}`
-                : currentClause?.text
+                : currentClause?.reference
                   ? `scope of work ${currentClause.clauseRef}`
                   : 'not available'}
             </div>
@@ -1029,13 +1039,26 @@ function FixTheAgent({
                 background: 'rgba(182,25,25,0.04)',
                 whiteSpace: 'pre-wrap',
                 minHeight: 60,
+                // Capped, and the same cap on both panes. A proposed rewrite
+                // runs to several paragraphs where the clause it replaces is
+                // one sentence, and the taller pane was dragging the shorter
+                // one and everything below it down the page. The long side
+                // scrolls inside itself now.
+                maxHeight: 260,
+                overflowY: 'auto',
               }}
             >
               {currentClause?.text ||
                 currentClause?.reason ||
                 "Current prompt not available — the agent's configuration is not exposed."}
             </div>
-            {currentClause?.text ? (
+            {/* Shown whenever a document was consulted — including when the
+                clause was not in it. Which version was searched is the whole
+                basis of "not in the scope of work", and withholding it left
+                that sentence unanswerable. `reference` carries the title and
+                the id, and the id is SOW-<fingerprint>, which is the same
+                fingerprint Scope & evals lists under Version history. */}
+            {currentClause?.source === 'agent_prompt' || currentClause?.reference ? (
               <div
                 style={{
                   padding: '6px 12px',
@@ -1047,7 +1070,9 @@ function FixTheAgent({
               >
                 {currentClause.source === 'agent_prompt'
                   ? "From the agent's live prompt."
-                  : `From ${currentClause.reference}. The agent's live prompt is not readable, so this is what it is held to.`}
+                  : currentClause.text
+                    ? `From ${currentClause.reference}. The agent's live prompt is not readable, so this is what it is held to.`
+                    : `Searched ${currentClause.reference}. The agent's live prompt is not readable.`}
               </div>
             ) : null}
           </div>
@@ -1073,6 +1098,8 @@ function FixTheAgent({
                 background: 'rgba(41,160,30,0.05)',
                 whiteSpace: 'pre-wrap',
                 minHeight: 60,
+                maxHeight: 260,
+                overflowY: 'auto',
               }}
             >
               {corr?.afterText || '—'}

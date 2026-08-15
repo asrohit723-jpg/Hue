@@ -62,7 +62,6 @@ function NavItem({
   onClick,
   iconBg,
   icon,
-  trailing,
   mini = false,
 }: {
   label: string;
@@ -70,7 +69,6 @@ function NavItem({
   onClick: () => void;
   iconBg: string;
   icon: React.ReactNode;
-  trailing?: React.ReactNode;
   /** Icon only. The label becomes the tooltip and the accessible name. */
   mini?: boolean;
 }) {
@@ -130,10 +128,9 @@ function NavItem({
       >
         {icon}
       </span>
-      {/* The label and its trailing count are what the rail sheds; the tooltip
-          above carries the name so an icon is never unidentifiable. */}
+      {/* The label is what the rail sheds; the tooltip above carries the name
+          so an icon is never unidentifiable. */}
       {!mini && <span>{label}</span>}
-      {!mini && trailing}
     </div>
   );
 }
@@ -181,8 +178,6 @@ export function Shell({ me }: { me: CurrentUser }) {
   const [query, setQuery] = useState('');
   const searchRef = useRef<HTMLInputElement | null>(null);
   const [sync, setSync] = useState<Awaited<ReturnType<typeof api.syncStatus>> | null>(null);
-  const [openDeviations, setOpenDeviations] = useState<number | null>(null);
-  const [callCount, setCallCount] = useState<number | null>(null);
 
   // Bumped when a refresh finishes, to make the screens that list calls re-read
   // rather than keep showing what was true before the pull.
@@ -428,18 +423,6 @@ export function Shell({ me }: { me: CurrentUser }) {
                 <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
               </svg>
             }
-            trailing={
-              <span
-                style={{
-                  marginLeft: 'auto',
-                  fontSize: 11,
-                  color: 'var(--ink-500)',
-                  fontVariantNumeric: 'tabular-nums',
-                }}
-              >
-                {callCount ?? '—'}
-              </span>
-            }
           />
 
           <NavItem
@@ -454,23 +437,6 @@ export function Shell({ me }: { me: CurrentUser }) {
                 <path d="M12 9v4" />
                 <path d="M12 17h.01" />
               </svg>
-            }
-            trailing={
-              openDeviations !== null && openDeviations > 0 ? (
-                <span
-                  style={{
-                    marginLeft: 'auto',
-                    background: 'var(--danger-050)',
-                    color: 'var(--danger-500)',
-                    fontSize: 11,
-                    fontWeight: 600,
-                    padding: '1px 7px',
-                    borderRadius: 'var(--radius-pill)',
-                  }}
-                >
-                  {openDeviations}
-                </span>
-              ) : undefined
             }
           />
 
@@ -710,17 +676,17 @@ export function Shell({ me }: { me: CurrentUser }) {
               flex: '0 0 auto',
             }}
           >
-            {/* Counts and freshness, both from syncStatus. Absent rather than
-                invented when the read failed. */}
+            {/* Freshness, from syncStatus. Absent rather than invented when the
+                read failed.
+
+                The totals that used to sit above this line are gone. A count in
+                the chrome is a number with no question attached to it — it
+                cannot be filtered, sorted or clicked through, and it competed
+                with the same figures on Overview, which can. What survives is
+                the one thing the chrome is uniquely placed to say: whether what
+                you are looking at is current. */}
             {sync && (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', lineHeight: 1.3 }}>
-                <span style={{ fontSize: 13, color: 'var(--ink-900)', whiteSpace: 'nowrap' }}>
-                  {sync.stored} call{sync.stored === 1 ? '' : 's'} ·{' '}
-                  <b style={{ fontWeight: 600, color: sync.openDeviations ? 'var(--danger-500)' : 'var(--ink-700)' }}>
-                    {sync.openDeviations}
-                  </b>{' '}
-                  open
-                </span>
                 <span style={{ fontSize: 12, color: 'var(--ink-700)', whiteSpace: 'nowrap' }}>
                   {!sync.reachable
                     ? 'Call channel unreachable'
@@ -792,10 +758,6 @@ export function Shell({ me }: { me: CurrentUser }) {
             // preserving, and its counts are the first thing a pull changes.
             <Overview
               key={refreshSignal}
-              onCounts={(calls, open) => {
-                setCallCount(calls);
-                setOpenDeviations(open);
-              }}
               onOpenDeviation={openDeviation}
               onNavigate={setScreen}
             />
