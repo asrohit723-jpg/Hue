@@ -27,8 +27,6 @@ import { page } from '../lib/layout';
 
 const SEV_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
 
-const COLS = '92px minmax(220px,1.9fr) 72px minmax(150px,1.1fr) 96px 116px 24px';
-
 const SEVERITY_OPTIONS = ['All severities', 'critical', 'high', 'medium', 'low'];
 const ROOT_OPTIONS = ['All causes', 'agent', 'data', 'sow', 'unknown'];
 const STATUS_OPTIONS = ['All statuses', 'Needs review', 'Fix applied', 'Resolved', 'With a human'];
@@ -52,7 +50,20 @@ const truncate: React.CSSProperties = {
   whiteSpace: 'nowrap',
 };
 
-const headCell: React.CSSProperties = { ...truncate };
+const headCell: React.CSSProperties = {
+  fontSize: 11,
+  letterSpacing: '.04em',
+  textTransform: 'uppercase',
+  color: 'var(--ink-600)',
+  fontWeight: 500,
+};
+
+/** Padding and the row rule live on the CELL in a table, not on the row. */
+const cell: React.CSSProperties = {
+  padding: '12px 16px',
+  borderBottom: '1px solid var(--ink-100)',
+  verticalAlign: 'middle',
+};
 
 export function Interventions({
   onOpen,
@@ -259,39 +270,69 @@ export function Interventions({
         }}
       >
         <div style={{ overflowX: 'auto' }}>
-          <div
+          {/* A real table, with the widths owned by the COLUMN — the same
+              conversion Call logs got. Every row used to be its own grid, so
+              one long unbreakable cell widened that row's tracks alone and the
+              columns stopped lining up between rows. With table-layout fixed
+              and percentage columns, a cell's content cannot move a column. */}
+          <table
             style={{
-              display: 'grid',
-              minWidth: 880,
-              gridTemplateColumns: COLS,
-              gap: 14,
-              padding: '9px 16px',
-              background: 'var(--ink-050)',
-              borderBottom: '1px solid var(--border-default)',
-              fontSize: 11,
-              letterSpacing: '.04em',
-              textTransform: 'uppercase',
-              color: 'var(--ink-600)',
-              fontWeight: 500,
+              width: '100%',
+              // 980, not the grid's 880. Seven cells each pad 16px on both
+              // sides, where the grid paid 16px at the two ends plus six 14px
+              // gaps — 224px of furniture against 116px. At 880 the extra
+              // 108px came out of the text, and CRITICAL and the clause pill
+              // ellipsised at the floor. The columns keep their proportions
+              // and the horizontal scroll starts 100px earlier instead.
+              minWidth: 980,
+              borderCollapse: 'collapse',
+              tableLayout: 'fixed',
             }}
           >
-            <span style={headCell}>Severity</span>
-            <span style={headCell}>Deviation</span>
-            <span style={headCell}>Clause</span>
-            <span style={headCell}>Call</span>
-            <span style={headCell}>Root cause</span>
-            <span style={headCell}>Status</span>
-            <span />
-          </div>
-
-          {rows.map((d) => (
-            <Row
-              key={d.id}
-              d={d}
-              criterionFull={criterionText.get(d.criterionId) ?? d.criterionId}
-              onOpen={() => onOpen(d.id)}
-            />
-          ))}
+            <colgroup>
+              <col style={{ width: '11%' }} />
+              <col style={{ width: '30%' }} />
+              <col style={{ width: '11%' }} />
+              <col style={{ width: '19%' }} />
+              <col style={{ width: '11%' }} />
+              <col style={{ width: '13%' }} />
+              <col style={{ width: '5%' }} />
+            </colgroup>
+            <thead>
+              <tr>
+                {['Severity', 'Deviation', 'Clause', 'Call', 'Root cause', 'Status', ''].map(
+                  (h, i) => (
+                    <th
+                      key={i}
+                      scope="col"
+                      style={{
+                        ...headCell,
+                        position: 'sticky',
+                        top: 0,
+                        zIndex: 1,
+                        textAlign: 'left',
+                        padding: '9px 16px',
+                        background: 'var(--surface-sunken)',
+                        borderBottom: '1px solid var(--border-default)',
+                      }}
+                    >
+                      {h}
+                    </th>
+                  ),
+                )}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((d) => (
+                <Row
+                  key={d.id}
+                  d={d}
+                  criterionFull={criterionText.get(d.criterionId) ?? d.criterionId}
+                  onOpen={() => onOpen(d.id)}
+                />
+              ))}
+            </tbody>
+          </table>
         </div>
 
         {rows.length === 0 && items.length > 0 && (
@@ -387,8 +428,10 @@ function Row({
   // caller's only identity.
   const caller = d.callerName || d.callerPhone || 'Unknown caller';
 
+  const where = `${d.siteHint || '—'} · ${d.startedAt ? clock(d.startedAt) : '—'}`;
+
   return (
-    <div
+    <tr
       onClick={onOpen}
       className="hue-row"
       onKeyDown={(e) => {
@@ -396,117 +439,154 @@ function Row({
       }}
       tabIndex={0}
       style={{
-        display: 'grid',
-        minWidth: 880,
-        gridTemplateColumns: COLS,
-        gap: 14,
-        alignItems: 'center',
-        padding: '12px 16px',
-        borderBottom: '1px solid var(--ink-100)',
         cursor: 'pointer',
         background: 'var(--surface-card)',
       }}
     >
-      <span
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-          fontSize: 11,
-          fontWeight: 600,
-          textTransform: 'uppercase',
-          letterSpacing: '.03em',
-          color: sev.fg,
-        }}
-      >
+      <td style={cell}>
         <span
           style={{
-            width: 7,
-            height: 7,
-            borderRadius: 'var(--radius-pill)',
-            background: sev.dot ?? sev.fg,
-            flex: '0 0 7px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            fontSize: 11,
+            fontWeight: 600,
+            textTransform: 'uppercase',
+            letterSpacing: '.03em',
+            color: sev.fg,
           }}
-        />
-        {d.severity}
-      </span>
-
-      <div style={{ minWidth: 0 }}>
-        <div title={d.summary} style={{ fontWeight: 500, ...truncate }}>
-          {d.summary}
-        </div>
-        <div
-          title={criterionFull}
-          style={{ fontSize: 12, color: 'var(--ink-600)', marginTop: 2, ...truncate }}
         >
-          Failed: {criterionFull}
+          <span
+            style={{
+              width: 7,
+              height: 7,
+              borderRadius: 'var(--radius-pill)',
+              background: sev.dot ?? sev.fg,
+              flex: '0 0 7px',
+            }}
+          />
+          {d.severity}
+        </span>
+      </td>
+
+      <td style={cell}>
+        <div style={{ minWidth: 0 }}>
+          <div
+            title={d.summary}
+            style={{
+              fontWeight: 500,
+              // Exactly two lines. A one-line ellipsis cut the deviation in the
+              // middle of the sentence that says what went wrong, which is the
+              // one thing this column exists to say.
+              display: '-webkit-box',
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: 'vertical',
+              overflow: 'hidden',
+              lineHeight: '19px',
+            }}
+          >
+            {d.summary || '—'}
+          </div>
+          <div
+            title={criterionFull}
+            style={{ fontSize: 12, color: 'var(--ink-600)', marginTop: 2, ...truncate }}
+          >
+            Failed: {criterionFull}
+          </div>
         </div>
-      </div>
+      </td>
 
-      <span
-        style={{
-          fontSize: 12,
-          fontWeight: 600,
-          color: 'var(--blue-600)',
-          background: 'var(--blue-025)',
-          borderRadius: 'var(--radius-pill)',
-          padding: '2px 8px',
-          justifySelf: 'start',
-        }}
-      >
-        {d.clauseRef || '—'}
-      </span>
+      <td style={cell}>
+        <span
+          style={{
+            display: 'inline-block',
+            maxWidth: '100%',
+            fontSize: 12,
+            fontWeight: 600,
+            color: 'var(--blue-600)',
+            background: 'var(--blue-025)',
+            borderRadius: 'var(--radius-pill)',
+            padding: '2px 8px',
+            ...truncate,
+          }}
+          title={d.clauseRef || '—'}
+        >
+          {d.clauseRef || '—'}
+        </span>
+      </td>
 
-      <div style={{ minWidth: 0 }}>
-        <div title={caller} style={{ fontSize: 13, ...truncate }}>
-          {caller}
+      <td style={cell}>
+        <div style={{ minWidth: 0 }}>
+          <div title={caller} style={{ fontSize: 13, ...truncate }}>
+            {caller}
+          </div>
+          <div title={where} style={{ fontSize: 12, color: 'var(--ink-600)', ...truncate }}>
+            {where}
+          </div>
         </div>
-        <div style={{ fontSize: 12, color: 'var(--ink-600)', ...truncate }}>
-          {d.siteHint || '—'} · {d.startedAt ? clock(d.startedAt) : '—'}
-        </div>
-      </div>
+      </td>
 
-      <span
-        style={{
-          fontSize: 11,
-          fontWeight: 600,
-          padding: '2px 8px',
-          borderRadius: 'var(--radius-pill)',
-          background: rc.bg,
-          color: rc.fg,
-          justifySelf: 'start',
-          textTransform: 'capitalize',
-        }}
-      >
-        {d.rootCause || 'unknown'}
-      </span>
+      <td style={cell}>
+        <span
+          style={{
+            display: 'inline-block',
+            maxWidth: '100%',
+            fontSize: 11,
+            fontWeight: 600,
+            padding: '2px 8px',
+            borderRadius: 'var(--radius-pill)',
+            background: rc.bg,
+            color: rc.fg,
+            textTransform: 'capitalize',
+            ...truncate,
+          }}
+          title={d.rootCause || 'unknown'}
+        >
+          {d.rootCause || 'unknown'}
+        </span>
+      </td>
 
-      <span
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-          fontSize: 12,
-          fontWeight: 600,
-          color: st.fg,
-        }}
-      >
-        <span style={{ width: 6, height: 6, borderRadius: 'var(--radius-pill)', background: st.fg }} />
-        {st.text}
-      </span>
+      <td style={cell}>
+        <span
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            fontSize: 12,
+            fontWeight: 600,
+            color: st.fg,
+            minWidth: 0,
+          }}
+        >
+          <span
+            style={{
+              width: 6,
+              height: 6,
+              borderRadius: 'var(--radius-pill)',
+              background: st.fg,
+              flex: '0 0 6px',
+            }}
+          />
+          <span title={st.text} style={truncate}>
+            {st.text}
+          </span>
+        </span>
+      </td>
 
-      <svg
-        width="16"
-        height="16"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="var(--ink-400)"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      >
-        <path d="m9 18 6-6-6-6" />
-      </svg>
-    </div>
+      <td style={cell}>
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="var(--ink-400)"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="m9 18 6-6-6-6" />
+        </svg>
+      </td>
+    </tr>
   );
 }
