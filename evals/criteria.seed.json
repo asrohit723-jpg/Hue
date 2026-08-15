@@ -51,7 +51,7 @@
     },
     {
       "id": "CR-LOG-04",
-      "clauseRef": "S-2.2",
+      "clauseRef": "S-2.1",
       "title": "Each distinct issue has its own service request",
       "description": "Deciding how many distinct issues a caller raised requires reading the call; the count is then compared against the records found.",
       "checkType": "intended_action",
@@ -181,7 +181,7 @@
     },
     {
       "id": "CR-SCHED-02",
-      "clauseRef": "S-4.3",
+      "clauseRef": "S-7.2",
       "title": "Access restrictions are captured verbatim",
       "description": "Whether the recorded text faithfully preserves the caller's stated restriction.",
       "checkType": "communication_fidelity",

@@ -3,7 +3,7 @@ import seed from '../../evals/criteria.seed.json';
 import { api, type DeviationWithEvidence } from '../lib/vibe';
 import { generateEvals } from '../lib/judges';
 import { BootSkeleton } from './BootSkeleton';
-import { WIRED_CRITERIA } from '../lib/criteria';
+import { WIRED_CRITERIA, unanchoredCriteria } from '../lib/criteria';
 import { page } from '../lib/layout';
 
 /**
@@ -245,6 +245,16 @@ export function ScopeEvals({ search = '' }: { search?: string }) {
   const sowDirty = Boolean(draft.trim()) && draft.trim() !== (sow?.sow?.body ?? '').trim();
   const generated = sow?.evals ?? [];
   const runnableCount = generated.filter((e) => e.active && e.runnable).length;
+
+  /**
+   * Criteria that grade every call while citing a clause this document does not
+   * contain. Recomputed from the stored text, so pasting a fuller contract
+   * empties it without anyone editing a list.
+   */
+  const unanchored = useMemo(
+    () => (sow?.sow?.body ? unanchoredCriteria(sow.sow.body) : []),
+    [sow],
+  );
 
   /** Failures per criterion, from the findings actually recorded. */
   const failures = useMemo(() => {
@@ -664,6 +674,83 @@ export function ScopeEvals({ search = '' }: { search?: string }) {
                     <p style={{ margin: '10px 0 0', fontSize: 12, color: 'var(--warning-700)' }}>
                       The agent's configured scope has changed upstream. Re-save to rewrite the evals.
                     </p>
+                  ) : null}
+
+                  {/* A finding about the CONTRACT, not about the app.
+                      These criteria grade every call and cite a clause number
+                      that is not in the document above, so the findings they
+                      raise point at a clause nobody can look up. The criteria
+                      are not wrong and the screen is not broken: the scope of
+                      work on file is shorter than the one they were written
+                      against. Saying so is the job. */}
+                  {unanchored.length > 0 ? (
+                    <div
+                      style={{
+                        marginTop: 16,
+                        border: '1px solid var(--warning-500)',
+                        borderRadius: 'var(--radius-sm)',
+                        background: 'var(--warning-050)',
+                        padding: '12px 14px',
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontSize: 13,
+                          fontWeight: 600,
+                          color: 'var(--warning-700)',
+                          lineHeight: '19px',
+                        }}
+                      >
+                        {unanchored.length} of {WIRED_CRITERIA.size} graded criteria cite a clause
+                        that is not in this document
+                      </div>
+                      <p
+                        style={{
+                          margin: '6px 0 0',
+                          fontSize: 12,
+                          lineHeight: '18px',
+                          color: 'var(--ink-700)',
+                          maxWidth: '62ch',
+                        }}
+                      >
+                        They still grade every call, and what they find is still real. But the clause
+                        they name cannot be shown on the finding, because this scope of work does not
+                        contain it — the numbering runs S-1.1, S-2.1, S-3.4, S-5.2, S-6.1, S-7.2, one
+                        clause per section. Paste the full contract to resolve them.
+                      </p>
+                      <div
+                        style={{
+                          display: 'flex',
+                          flexWrap: 'wrap',
+                          gap: 6,
+                          marginTop: 10,
+                        }}
+                      >
+                        {unanchored.map((u) => (
+                          <span
+                            key={u.id}
+                            title={`${u.id} cites ${u.clauseRef}, which is not in this document`}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 6,
+                              fontSize: 11,
+                              fontFamily: 'var(--font-mono)',
+                              padding: '3px 8px',
+                              borderRadius: 'var(--radius-pill)',
+                              background: 'var(--surface-card)',
+                              border: '1px solid var(--warning-500)',
+                              color: 'var(--ink-700)',
+                            }}
+                          >
+                            {u.id}
+                            <span style={{ color: 'var(--warning-700)', fontWeight: 600 }}>
+                              {u.clauseRef}
+                            </span>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
                   ) : null}
                 </>
               ) : (

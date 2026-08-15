@@ -2630,7 +2630,11 @@ const SEMANTIC_CRITERIA: Record<string, { clauseRef: string; requires: string }>
       'where the caller reported no fault at all, or where a record does exist.',
   },
   'CR-LOG-04': {
-    clauseRef: 'S-2.2',
+    // S-2.2 is not in the scope of work on file. S-2.1 is, and it carries this
+    // rule in the plural already — "EVERY new fault the caller reports must be
+    // logged as a service request" — which is exactly what two faults merged
+    // into one record breaks. Same remap rule as CR-SCHED-02: forward only.
+    clauseRef: 'S-2.1',
     requires:
       'Each distinct issue the caller raised must have its own service request. Two unrelated faults must not be merged into one record.',
   },
@@ -2697,7 +2701,15 @@ const SEMANTIC_CRITERIA: Record<string, { clauseRef: string; requires: string }>
       'Not applicable where the caller was calm throughout.',
   },
   'CR-SCHED-02': {
-    clauseRef: 'S-4.3',
+    // S-4.3 in the numbering these criteria were written against, which is not
+    // the numbering of the scope of work on file. The stored SOW says the same
+    // thing at S-7.2 — "Access restrictions the caller states — gate codes,
+    // permitted hours — must be recorded on the request" — near enough
+    // verbatim, so this cites that instead of a clause nobody can look up.
+    //
+    // FORWARD ONLY. Deviations already written keep the clause_ref they were
+    // found under: a closed finding must go on saying what it actually claimed.
+    clauseRef: 'S-7.2',
     requires:
       'Where the caller states an access restriction — a gate code, a time the area cannot be entered, someone to ask for — it must be captured on the record in a form that preserves what they said. ' +
       'Fails where the restriction is missing, or reworded into something that would mislead whoever attends. ' +
