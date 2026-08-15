@@ -161,13 +161,21 @@ const FAMILY_LABEL: Record<string, string> = {
   CAT: 'Categorisation',
 };
 // The design's bar palette, in its order.
+/**
+ * One categorical ramp, assigned BY INDEX.
+ *
+ * These bars are criterion families — categories with no order between them.
+ * The previous ramp ran blue, purple, yellow, red, which is the palette of a
+ * severity scale, so the fourth-largest category read as the most dangerous
+ * one. Same assignment rule as before, a palette that does not imply a ranking.
+ */
 const BAR_COLORS = [
-  'var(--blue-500)',
-  'var(--brand-indigo-400)',
-  'var(--warning-500)',
-  'var(--danger-500)',
-  'var(--danger-700)',
-  'var(--ink-400)',
+  'var(--chart-1)',
+  'var(--chart-2)',
+  'var(--chart-3)',
+  'var(--chart-4)',
+  'var(--chart-5)',
+  'var(--chart-6)',
 ];
 
 function familyOf(criterionId: string): string {
@@ -342,7 +350,14 @@ export function Overview({
     }
 
     // Design geometry: viewBox 0 0 600 60, drawn between y=6 and y=56.
-    let spark: { points: string; endX: string; endY: string } | null = null;
+    let spark: {
+      points: string;
+      endX: string;
+      endY: string;
+      area: string;
+      min: number;
+      max: number;
+    } | null = null;
     if (series.length >= 2) {
       const lo = Math.min(...series) - 4;
       const hi = Math.max(...series) + 4;
@@ -354,6 +369,10 @@ export function Overview({
         points: pts.map((p) => `${p.x},${p.y}`).join(' '),
         endX: pts[pts.length - 1].x,
         endY: pts[pts.length - 1].y,
+        // Same points, closed to the baseline — a fill, not a second series.
+        area: `${pts.map((p) => `${p.x},${p.y}`).join(' ')} 600,60 0,60`,
+        min: Math.min(...series),
+        max: Math.max(...series),
       };
     }
 
@@ -377,6 +396,19 @@ export function Overview({
     // ---- sentiment donut -------------------------------------------------
     const C = 2 * Math.PI * 54;
     let acc = 0;
+    // Calls whose sentiment matches NO bucket — the channel gave no reading, or
+    // gave one this app does not bucket. They were counted in the centre and
+    // drawn nowhere, so a 7-call range with 5 unread sentiments showed arcs
+    // summing to 2 around a centre reading 7.
+    //
+    // Derived from the same counts rather than replacing them: every existing
+    // number is unchanged, and the arc now reconciles with the number in the
+    // middle of it.
+    const bucketed = SENTIMENT_BUCKETS.reduce(
+      (n, b) => n + calls.filter((c) => c.sentiment && b.match.includes(c.sentiment)).length,
+      0,
+    );
+    const unread = Math.max(0, calls.length - bucketed);
     const donut = SENTIMENT_BUCKETS.map((b) => {
       const count = calls.filter((c) => c.sentiment && b.match.includes(c.sentiment)).length;
       const len = calls.length ? (count / calls.length) * C : 0;
@@ -391,6 +423,19 @@ export function Overview({
       acc += len;
       return seg;
     });
+
+    if (unread > 0) {
+      const len = calls.length ? (unread / calls.length) * C : 0;
+      donut.push({
+        label: 'No reading',
+        color: 'var(--ink-200)',
+        count: unread,
+        pct: calls.length ? Math.round((unread / calls.length) * 100) : 0,
+        dash: `${len.toFixed(1)} ${(C - len).toFixed(1)}`,
+        offset: (-acc).toFixed(1),
+      });
+      acc += len;
+    }
 
     // ---- recent interventions -------------------------------------------
     const recent = open
@@ -434,6 +479,7 @@ export function Overview({
       open,
       critical,
       bars,
+      barMax,
       donut,
       recent,
       recurring,
@@ -630,6 +676,17 @@ export function Overview({
           >
             {v.spark && (
               <>
+                {/* Baseline first, so the line reads against something. */}
+                <line
+                  x1="0"
+                  y1="59"
+                  x2="600"
+                  y2="59"
+                  stroke="var(--border-default)"
+                  strokeWidth="1"
+                  vectorEffect="non-scaling-stroke"
+                />
+                <polygon points={v.spark.area} fill={SPARK_STROKE} opacity="0.08" />
                 <polyline
                   points={v.spark.points}
                   fill="none"
@@ -643,6 +700,24 @@ export function Overview({
               </>
             )}
           </svg>
+          {/* The line is drawn between its own min and max, not 0-100, so the
+              range it spans is worth stating. Both values are already in the
+              series; nothing is computed for display that was not there. */}
+          {v.spark && (
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                marginTop: 4,
+                fontSize: 11,
+                color: 'var(--ink-500)',
+                fontVariantNumeric: 'tabular-nums',
+              }}
+            >
+              <span>min {v.spark.min}</span>
+              <span>max {v.spark.max}</span>
+            </div>
+          )}
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -726,6 +801,27 @@ export function Overview({
         <div style={{ ...card, padding: '18px 20px', display: 'flex', flexDirection: 'column' }}>
           <h3 style={panelH3}>Deviations by type</h3>
           <p style={panelSub}>{v.rangeLabel}</p>
+          {/* The bars are normalised against the largest category, so a full
+              bar means "the most", not "all". Nothing said so before. */}
+          {v.bars.length > 0 && (
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                marginTop: 14,
+                paddingBottom: 4,
+                borderBottom: '1px solid var(--border-default)',
+                fontSize: 11,
+                letterSpacing: '.04em',
+                textTransform: 'uppercase',
+                color: 'var(--ink-500)',
+                fontVariantNumeric: 'tabular-nums',
+              }}
+            >
+              <span>0</span>
+              <span>{v.barMax}</span>
+            </div>
+          )}
           <div
             style={{
               display: 'flex',
@@ -737,7 +833,11 @@ export function Overview({
             }}
           >
             {v.bars.map((b) => (
-              <div key={b.label} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+              <div
+                key={b.label}
+                style={{ display: 'flex', flexDirection: 'column', gap: 5 }}
+                title={`${b.label}: ${b.count}`}
+              >
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
                   <span>{b.label}</span>
                   <span style={{ fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{b.count}</span>
@@ -745,17 +845,17 @@ export function Overview({
                 <div
                   style={{
                     height: 8,
-                    borderRadius: 'var(--radius-pill)',
-                    background: 'var(--ink-100)',
+                    borderRadius: 'var(--radius-sm)',
+                    background: 'var(--surface-sunken)',
                     overflow: 'hidden',
                   }}
                 >
                   <div
                     style={{
                       height: '100%',
+                      borderRadius: 'var(--radius-sm)',
                       width: `${b.pct}%`,
                       background: b.color,
-                      borderRadius: 'var(--radius-pill)',
                     }}
                   />
                 </div>
@@ -805,7 +905,7 @@ export function Overview({
                 fontSize="34"
                 fontFamily="Roboto Condensed"
                 fontWeight="700"
-                fill="#283648"
+                fill="var(--ink-900)"
               >
                 {v.calls.length}
               </text>
@@ -816,7 +916,15 @@ export function Overview({
               {v.donut.map((s) => (
                 <div
                   key={s.label}
-                  style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 14 }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 9,
+                    fontSize: 14,
+                    // A bucket with nothing in it is still worth listing, but it
+                    // should not compete with the ones that have data.
+                    color: s.count === 0 ? 'var(--ink-400)' : undefined,
+                  }}
                 >
                   <span
                     style={{ width: 10, height: 10, borderRadius: 'var(--radius-sm)', background: s.color }}

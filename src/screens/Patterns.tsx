@@ -413,9 +413,13 @@ function PatternCard({
             }}
           >
             <span style={microLabel}>Calls per month</span>
-            <span style={{ fontSize: 11, color: 'var(--ink-400)' }}>peak {peak}</span>
+            <span style={{ fontSize: 11, color: 'var(--ink-500)', fontVariantNumeric: 'tabular-nums' }}>peak {peak}</span>
           </div>
-          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 52 }}>
+          {/* Compact, and an empty month is a TICK rather than a slab. Eleven
+              of twelve buckets are usually zero, and drawing each as a
+              full-width bar made emptiness the loudest thing in the card. Same
+              twelve buckets, same values. */}
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 88 }}>
             {p.bars.map((b, i) => {
               const isLast = i === p.bars.length - 1;
               const d = new Date();
@@ -434,18 +438,22 @@ function PatternCard({
                   }}
                 >
                   {isLast && (
-                    <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--blue-700)', lineHeight: '13px' }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--chart-1)', lineHeight: '13px', fontVariantNumeric: 'tabular-nums' }}>
                       {b}
                     </span>
                   )}
                   <div
                     style={{
-                      width: '100%',
-                      // A zero month still draws a sliver, so the axis reads as
-                      // twelve months rather than a gap.
-                      height: `${b === 0 ? 2 : Math.max(6, Math.round((b / peak) * 100))}%`,
-                      background: isLast ? 'var(--blue-700)' : 'var(--border-default)',
-                      borderRadius: '2px 2px 0 0',
+                      // A zero month narrows to a tick instead of occupying a
+                      // full column, so the months that carry calls read first.
+                      width: b === 0 ? 3 : '100%',
+                      height: `${b === 0 ? 3 : Math.max(8, Math.round((b / peak) * 100))}%`,
+                      background: b === 0
+                        ? 'var(--ink-200)'
+                        : isLast
+                          ? 'var(--chart-1)'
+                          : 'var(--ink-300)',
+                      borderRadius: 'var(--radius-sm) var(--radius-sm) 0 0',
                     }}
                   />
                 </div>

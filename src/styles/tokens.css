@@ -135,6 +135,17 @@
   --surface-sunken:  var(--ink-050);
   --shadow-popover:  0 8px 24px rgba(40,54,72,0.12), 0 1px 2px rgba(40,54,72,0.04);
 
+  /* ---------- Categorical chart ramp ----------
+     For series with no inherent order, assigned by INDEX. Deliberately not the
+     semantic palette: a category is not a severity, and painting the fourth
+     largest group red says it is the worst one. */
+  --chart-1: #5E3ED3;
+  --chart-2: #3D8BFA;
+  --chart-3: #2ED1FF;
+  --chart-4: #49B83F;
+  --chart-5: #FFB020;
+  --chart-6: #B61919;
+
   /* ---------- Badges: five variants, and only five ----------
      pass / fail / warn / neutral / accent. Semantic colour marks STATE only;
      anything that is merely absent or unknown is neutral, because yellow reads
