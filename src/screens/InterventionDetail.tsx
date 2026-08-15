@@ -9,6 +9,7 @@ import {
   classifyRootCause,
   generateEvals,
   proposeCorrection,
+  writeServiceRequest,
   JudgeTimeout,
   type JudgeContext,
 } from '../lib/judges';
@@ -88,6 +89,8 @@ interface CmmsDraft {
   siteNote: string;
   fields: Array<{ label: string; value: string }>;
   missing: string[];
+  /** False until the service-request-writer has read the call. */
+  written: boolean;
 }
 
 interface CorrectionRecord {
@@ -161,6 +164,8 @@ export function InterventionDetail({
   // nonce bump — a screen that re-drafts on refresh burns two agent calls each
   // time and can overwrite a draft somebody is reading.
   const drafted = useRef<string | null>(null);
+  /** The SR narrative is written once per deviation, like the correction. */
+  const srWritten = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -314,6 +319,42 @@ export function InterventionDetail({
     drafted.current = dev.id;
     void analyse();
   }, [dev, corr]);
+
+  /**
+   * Write the service request's subject and description, once, per deviation.
+   *
+   * Runs whenever the plan is a create and the narrative has not been written —
+   * including for findings the proposer routed to a prompt fix, because whether
+   * the CMMS is missing a record has nothing to do with what the proposer
+   * concluded about the agent.
+   *
+   * It commits nothing. The draft is stored so the button and the write send the
+   * same words, and the CMMS is still only touched by the button.
+   */
+  useEffect(() => {
+    if (!dev || cmmsPlan?.verb !== 'create') return;
+    if (cmmsDraft?.written || srWritten.current === dev.id) return;
+    srWritten.current = dev.id;
+    let cancelled = false;
+    (async () => {
+      try {
+        await writeServiceRequest(dev.id);
+        if (cancelled) return;
+        // Re-read rather than patch: the server assembles the description,
+        // and the panel must preview exactly what the write will send.
+        const fresh = await callFn<{ cmmsDraft?: CmmsDraft | null }>('getCorrection', {
+          deviationId: dev.id,
+        });
+        if (!cancelled) setCmmsDraft(fresh.cmmsDraft ?? null);
+      } catch (err) {
+        // A writer that failed leaves the plain fallback in place, which is
+        // honest about not having been written. Allow a retry on reopen.
+        if (!cancelled) srWritten.current = null;
+        console.warn('service-request writer failed', err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [dev, cmmsPlan, cmmsDraft?.written]);
 
   /**
    * Approve the agent-side fix: write it into the scope of work.

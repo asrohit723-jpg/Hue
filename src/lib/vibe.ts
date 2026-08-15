@@ -453,6 +453,26 @@ export const api = {
       cmmsRecord?: Record<string, unknown> | null;
     }>('governance', 'semanticContext', { conversationId, criterionId }),
 
+  /** What the service-request-writer reads: the call, the caller, the site. */
+  srDraftContext: (deviationId: string) =>
+    call<{
+      callId: string;
+      durationSec: number | null;
+      callerPhone: string;
+      site: string;
+      channelSummaryTags: string;
+      transcript: Array<{ at: string; who: string; said: string }>;
+    }>('governance', 'srDraftContext', { deviationId }),
+
+  /** Store the written subject and description. Re-validated server-side. */
+  saveSrDraft: (d: {
+    deviationId: string;
+    subject: string;
+    description: string;
+    category: string;
+    missingDetail: string;
+  }) => call<{ correctionId: string; saved: boolean; subject: string }>('governance', 'saveSrDraft', d),
+
   saveSemanticVerdict: (v: {
     conversationId: string;
     criterionId: string;

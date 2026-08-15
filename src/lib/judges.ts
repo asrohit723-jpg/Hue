@@ -28,6 +28,7 @@ const AGENTS = {
   proposer: 'correction-proposer',
   callAnalysis: 'call-analysis',
   evalWriter: 'eval-writer',
+  srWriter: 'service-request-writer',
 } as const;
 
 export class JudgeTimeout extends Error {}
@@ -291,6 +292,49 @@ export async function classifyRootCause(ctx: JudgeContext): Promise<RootCauseVer
     throw new JudgeInvalid(`Classifier returned an unusable rootCause: ${v?.rootCause}`);
   }
   return v;
+}
+
+export interface ServiceRequestDraft {
+  subject: string;
+  description: string;
+  category: string;
+  missingDetail: string;
+}
+
+/**
+ * Write the service request a call should have produced.
+ *
+ * This replaces string-slicing the caller's first turn, which is not a summary
+ * and on call 2534 was not even the fault — "Hi, there has been a, uh, problem."
+ * went into SR 210668 as its subject while the outage was three turns later.
+ * Consolidating a stuttered, interrupted call into one sentence a technician can
+ * act on is a reading task, so it is given to a model that reads the whole call.
+ *
+ * Here, in the browser, for the same reason as every other judge: a Studio
+ * Function's fetch aborts at ~10s. The server persists it through `saveSrDraft`,
+ * which re-validates — a subject that still reads as a quotation, or a body that
+ * has picked up governance vocabulary, is rejected there rather than written to
+ * somebody's CMMS.
+ */
+export async function writeServiceRequest(deviationId: string): Promise<ServiceRequestDraft> {
+  const ctx = await api.srDraftContext(deviationId);
+  const v = await runAgent<ServiceRequestDraft>(AGENTS.srWriter, ctx);
+
+  const subject = String(v?.subject ?? '').trim();
+  const description = String(v?.description ?? '').trim();
+  if (!subject || !description) {
+    throw new JudgeInvalid('The service-request writer returned no subject or no description.');
+  }
+
+  await api.saveSrDraft({
+    deviationId,
+    subject,
+    description,
+    category: String(v?.category ?? '').trim(),
+    missingDetail: String(v?.missingDetail ?? '').trim(),
+  });
+
+  return { subject, description, category: v?.category ?? '', missingDetail: v?.missingDetail ?? '' };
 }
 
 /** One pattern's worth of context, from the `patternContext` handler. */

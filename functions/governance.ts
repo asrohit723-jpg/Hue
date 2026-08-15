@@ -931,8 +931,34 @@ async function gradeConversation(convoId: string) {
     // indistinguishable from the agent inventing a reference, which is the
     // exact failure Hue exists to catch. 'not_checked' is neither a match nor
     // "no record" — it is the truth, that nobody looked.
+    // THE RECORD HUE ITSELF RAISED counts as a record.
+    //
+    // The join reads what the AGENT did — a reference read back, or a request
+    // created during the call. Neither happened when the fix came from this
+    // app: approveCorrection creates the service request and writes its id to
+    // `cmms_sr_id`, and nothing here looked at that. So a call whose missing
+    // record had already been raised re-graded as "no service request exists",
+    // because the agent had still not made one. True, and useless: the finding
+    // would reopen against a record that is sitting in the CMMS.
+    //
+    // Resolved on the id, live, exactly like the claimed-number path — the
+    // stored id is a pointer, not proof, and a record deleted since is a record
+    // that no longer exists.
+    const fixedId = String(convo.cmms_sr_id ?? '').trim();
     if (!chan.isVoice) {
       joinMethod = 'not_checked';
+    } else if (fixedId && !claimedNumber) {
+      const byFixed = await cmms('list-service-requests', {
+        page_size: 1,
+        page: 1,
+        expand: 'site,requester',
+        filters: `id(equals)=${fixedId}`,
+      });
+      matched = rowsOf(byFixed)[0] ?? null;
+      if (matched) {
+        joinMethod = 'hue_raised';
+        joinConfidence = 1;
+      }
     } else if (claimedNumber) {
       // The agent read a specific record id back to the caller. Resolve on that
       // id and NOTHING else: `id(equals)=N` is the verified filter syntax.
@@ -1184,6 +1210,16 @@ async function gradeConversation(convoId: string) {
         // Critical: an unlogged fault is the failure this app exists to catch,
         // and it outranks anything about how the call was conducted.
         severity: 'critical',
+        // CLASSIFIED HERE, not left for a judge that may never run.
+        //
+        // 'agent', and the scope of work is explicit about why: "Site
+        // identification must never block logging. As soon as the caller states
+        // a reportable issue, create the service request immediately with
+        // whatever is known and enrich it as details arrive." The caller stated
+        // the fault; the agent asked for the site, then for the unit, and
+        // logged nothing. The line going quiet is not the cause — the agent had
+        // everything it needed to raise the request two turns earlier.
+        rootCause: 'agent',
         evidence,
       });
     }
@@ -1280,18 +1316,30 @@ async function gradeConversation(convoId: string) {
         [convoId, f.criterionId],
       ).rows[0];
       const devId = prior?.id ?? `DV-${convoId}-${f.criterionId}`;
+      // A check that KNOWS the cause states it. Only where the check has a
+      // conclusion, and only over 'unknown' — a root cause the classifier has
+      // already settled is a judgement, and a re-grade must not quietly
+      // overwrite it with a default.
+      const rootCause = String((f as any).rootCause ?? '') || 'unknown';
       if (prior) {
         db.query(
           `update deviations set summary=$2, severity=$3, checked_sr_id=$4, evidence=$5,
              detected_at=$6, detected_by='deterministic' where id=$1`,
           [devId, f.summary, f.severity, srId, JSON.stringify(f.evidence), nowIso()],
         );
+        if (rootCause !== 'unknown') {
+          db.query(
+            `update deviations set root_cause=$2
+              where id=$1 and (root_cause = 'unknown' or root_cause = '')`,
+            [devId, rootCause],
+          );
+        }
       } else {
         db.query(
           `insert into deviations
              (id, conversation_id, criterion_id, clause_ref, summary, severity, root_cause,
               status, detected_at, detected_by, checked_sr_id, evidence)
-           values ($1,$2,$3,$4,$5,$6,'unknown','open',$7,'deterministic',$8,$9)`,
+           values ($1,$2,$3,$4,$5,$6,$10,'open',$7,'deterministic',$8,$9)`,
           [
             devId,
             convoId,
@@ -1302,6 +1350,7 @@ async function gradeConversation(convoId: string) {
             nowIso(),
             srId,
             JSON.stringify(f.evidence),
+            rootCause,
           ],
         );
       }
@@ -1637,6 +1686,83 @@ server.addHandler({
         'Deterministic checks only. The semantic judges and the call analyst cannot run here — ' +
         'a Studio Function aborts a fetch at ~10s and every agent call takes longer. Those stay on ' +
         'the browser-side "Run evals" action.',
+    };
+  },
+});
+
+server.addHandler({
+  name: 'regradeCalls',
+  description:
+    'Re-run the deterministic checks over calls that have ALREADY been graded, so a check added after they were graded applies to them too. gradeUngraded deliberately skips these; this is the only way an existing finding set is refreshed.',
+  parameters: {
+    conversationIds: {
+      description: 'Comma-separated conversation ids. Omit to sweep every stored call, newest first.',
+      type: 'string',
+    },
+    limit: { description: 'Max calls this fire (default 25, max 200)', type: 'number' },
+    budgetSeconds: { description: 'Stop starting new calls after this many seconds', type: 'number' },
+  },
+  execute: async (args) => {
+    // WHY THIS EXISTS.
+    //
+    // Deterministic findings are MATERIALISED — `evaluate` writes rows into
+    // `deviations`, and every screen afterwards reads those rows. Nothing
+    // recomputes a finding on read. So a check added today does not reach a
+    // call graded yesterday, and cannot: the call was graded against the checks
+    // that existed at the time, which is also what makes an old grade
+    // auditable. The remedy is to grade it again, deliberately.
+    const db = connect();
+    const explicit = String(args.conversationIds ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    const limit = Math.min(Math.max(Number(args.limit) || 25, 1), 200);
+    const budgetMs = Math.min(Math.max(Number(args.budgetSeconds) || 600, 30), 840) * 1000;
+    const startedAt = Date.now();
+
+    const ids = explicit.length
+      ? explicit
+      : db
+          .query(
+            `select id from conversations where id <> '__seed__'
+              order by started_at desc limit $1`,
+            [limit],
+          )
+          .rows.map((r: any) => String(r.id));
+
+    const graded: any[] = [];
+    const failed: any[] = [];
+    let stoppedForBudget = false;
+
+    for (const id of ids.slice(0, limit)) {
+      if (Date.now() - startedAt > budgetMs) {
+        stoppedForBudget = true;
+        break;
+      }
+      try {
+        const res = await gradeConversation(id);
+        graded.push({
+          id,
+          deviationsFound: res?.deviationsFound ?? 0,
+          findings: (res?.findings ?? []).map((f: any) => `${f.criterionId}:${f.severity}`),
+        });
+      } catch (err) {
+        failed.push({ id, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    return {
+      requested: ids.length,
+      regraded: graded.length,
+      details: graded,
+      failed,
+      stoppedForBudget,
+      elapsedSeconds: Math.round((Date.now() - startedAt) / 1000),
+      note:
+        'Deterministic checks only, exactly as gradeUngraded. Root causes already settled by the ' +
+        'classifier are left alone; a call whose missing record has since been raised joins to that ' +
+        'record and does not re-open the finding.',
     };
   },
 });
@@ -2928,11 +3054,40 @@ function agentFixFor(convo: any, turns: any[]): { warranted: boolean; reason: st
  * so the caller's number, the source call and the category read off the fault
  * go into the description, where they will actually land.
  */
+/** The service-request-writer's output, stored on the correction by saveSrDraft. */
+function srDraftOf(corr: any): {
+  subject: string;
+  description: string;
+  category: string;
+  missingDetail: string;
+} | null {
+  if (!corr) return null;
+  try {
+    const a =
+      typeof corr.cmms_action === 'string'
+        ? JSON.parse(corr.cmms_action || '{}')
+        : corr.cmms_action ?? {};
+    const d = a?.srDraft;
+    if (d && String(d.subject ?? '').trim() && String(d.description ?? '').trim()) {
+      return {
+        subject: String(d.subject).trim(),
+        description: String(d.description).trim(),
+        category: String(d.category ?? '').trim(),
+        missingDetail: String(d.missingDetail ?? '').trim(),
+      };
+    }
+  } catch {
+    // A malformed action is a missing draft, not a crash.
+  }
+  return null;
+}
+
 async function draftServiceRequestFor(
   db: any,
   convo: any,
   turns: any[],
   dev: any,
+  corr?: any,
 ): Promise<{
   subject: string;
   description: string;
@@ -2942,6 +3097,7 @@ async function draftServiceRequestFor(
   siteNote: string;
   fields: Array<{ label: string; value: string }>;
   missing: string[];
+  written: boolean;
 }> {
   const callerTurns = turns.filter(
     (t: any) => t.performer === 'caller' && String(t.message ?? '').trim(),
@@ -2991,20 +3147,26 @@ async function draftServiceRequestFor(
     siteNote = `the CMMS site list could not be read (${err instanceof Error ? err.message : String(err)})`;
   }
 
+  // ---- what the AI wrote, where it has run -----------------------------
+  //
+  // The narrative is a READING task over the whole call, and it was being done
+  // by string-slicing the first caller turn. On call 2534 that turn was "Hi,
+  // there has been a, uh, problem." — which is what got written to SR 210668 as
+  // its subject. The fault was three turns later. No amount of trimming fixes
+  // that; only reading the call does, and reading is what a model is for.
+  //
+  // It runs in the BROWSER, like every other judge — a Studio Function aborts a
+  // fetch at ~10s — and lands here through saveSrDraft. Until it has run, the
+  // fallback below is deliberately plain and says where it came from, rather
+  // than dressing up a fragment as a title.
+  const ai = srDraftOf(corr);
+
   // ---- the rest --------------------------------------------------------
-  // The caller's words, with the greeting taken off the front — "Hi, there has
-  // been an issue with the TV" is a hello, not a subject line. Nothing is
-  // reworded: only a leading salutation and a trailing dangling dash are
-  // removed, so what is left is still what they said.
-  const subject =
-    (faultWords
-      ? faultWords
-          .replace(/\s+/g, ' ')
-          .replace(/^\s*(hi|hello|hey|yeah|yes|good\s+(morning|afternoon|evening))\b[\s,.!-]*/i, '')
-          .replace(/[—–\-\s]+$/, '')
-          .replace(/^./, (ch: string) => ch.toUpperCase())
-          .slice(0, 120)
-      : 'Reported fault') || 'Reported fault';
+  // The AI's title where it has run. The fallback names the call rather than
+  // quoting it: an honest placeholder beats a fragment posing as a subject.
+  const subject = ai
+    ? ai.subject.slice(0, 120)
+    : `Reported fault from call ${callId}${siteName ? ` — ${siteName}` : ''}`;
 
   // Urgency comes from the CALL, not from whichever finding you happened to
   // open. Two panels on one call proposing different urgency for the same piece
@@ -3026,16 +3188,29 @@ async function draftServiceRequestFor(
   }
   const urgency = ['critical', 'high'].indexOf(worst) >= 0 ? 'Urgent' : 'Not Urgent';
 
-  const description = [
-    `Reported by the caller on call ${callId}, in their words:`,
-    `"${faultWords || 'no caller turn recorded'}"`,
-    '',
+  // THE BODY IS THE FAULT. Nothing else.
+  //
+  // What went into SR 210668 was Hue talking to itself — the finding id, the
+  // criterion, the proposer's reasoning about the agent — with the caller's
+  // fault nowhere in it. A technician opening that ticket learns what the
+  // governance engine concluded and not what is broken.
+  //
+  // So: the fault narrative first and alone. Then the details the CMMS has no
+  // field for, in a block of their own. Then ONE line of provenance, because
+  // traceability is worth a line and not a paragraph.
+  const details = [
     `Caller contact: ${phone || 'not recorded on this call'}`,
-    `Source: helpdesk call ${callId}${convo?.started_at ? ` (${convo.started_at})` : ''}`,
-    `Category: read from the fault as described above — the CMMS create action has no category field, so it is recorded here.`,
-    '',
-    `Raised by Hue governance from finding ${dev?.id ?? ''}: ${String(dev?.summary ?? '').slice(0, 600)}`,
-  ]
+    `Source call: ${callId}${convo?.started_at ? ` (${convo.started_at})` : ''}`,
+    ai?.category ? `Category: ${ai.category}` : null,
+    ai?.missingDetail ? `Still to confirm: ${ai.missingDetail}` : null,
+  ].filter(Boolean) as string[];
+
+  const body = ai
+    ? ai.description
+    : `A fault was reported on call ${callId} and no service request was raised. The call ` +
+      `transcript has not yet been read into a summary — open the call in Hue for the detail.`;
+
+  const description = [body, '', ...details, '', `Raised by Hue from call ${callId}.`]
     .join('\n')
     .slice(0, 2000);
 
@@ -3047,12 +3222,26 @@ async function draftServiceRequestFor(
     { label: 'Subject', value: subject },
     { label: 'Site', value: siteName ? `${siteName} (${siteId})` : `— ${siteNote}` },
     { label: 'Urgency', value: urgency },
+    { label: 'Fault', value: body },
+    ...(ai?.category ? [{ label: 'Category', value: ai.category }] : []),
+    ...(ai?.missingDetail ? [{ label: 'Still to confirm', value: ai.missingDetail }] : []),
     { label: 'Caller contact', value: phone || '—' },
     { label: 'Source call', value: callId || '—' },
-    { label: 'Description', value: faultWords || '—' },
   ];
 
-  return { subject, description, urgency, siteId, siteName, siteNote, fields, missing };
+  return {
+    subject,
+    description,
+    urgency,
+    siteId,
+    siteName,
+    siteNote,
+    fields,
+    missing,
+    // So the panel can say the narrative has not been written yet rather than
+    // presenting the placeholder as though a model had produced it.
+    written: Boolean(ai),
+  };
 }
 
 /**
@@ -3317,7 +3506,7 @@ server.addHandler({
         // list, which is how "Skyline—", cut off mid-word, still resolves. This
         // used to throw here, which is what made create impossible for exactly
         // the calls that most needed a record.
-        draft = await draftServiceRequestFor(db, convo, turns, dev);
+        draft = await draftServiceRequestFor(db, convo, turns, dev, corr);
         siteId = draft.siteId;
         if (!siteId) {
           throw new Error(
@@ -3423,7 +3612,7 @@ server.addHandler({
       // The same draft the panel previewed, so the record written is the record
       // that was approved. Built here if the site came from the proposer's own
       // fields and the precheck never needed it.
-      if (!draft) draft = await draftServiceRequestFor(db, convo, turns, dev);
+      if (!draft) draft = await draftServiceRequestFor(db, convo, turns, dev, corr);
 
       const created = await cmms('create-service-request', {
         servicerequest: {
@@ -4329,7 +4518,7 @@ server.addHandler({
     // Drafted only when something is actually going to be created — the site
     // lookup is a live CMMS read and must not run on every detail view.
     const draft =
-      plan?.verb === 'create' && convo ? await draftServiceRequestFor(db, convo, turns, dev) : null;
+      plan?.verb === 'create' && convo ? await draftServiceRequestFor(db, convo, turns, dev, row) : null;
 
     if (!row) {
       return { correction: null, cmmsPlan: plan, cmmsDraft: draft, agentFix, currentClause };
@@ -4365,6 +4554,125 @@ server.addHandler({
       agentFix,
       currentClause,
     };
+  },
+});
+
+server.addHandler({
+  name: 'srDraftContext',
+  description:
+    'Everything the service-request-writer needs to write the record one call should have produced: the transcript, the caller, and the site the call resolved to. No model call — the writing happens in the browser.',
+  parameters: { deviationId: { description: 'Deviation id', type: 'string' } },
+  execute: async (args) => {
+    const db = connect();
+    const devId = String(args.deviationId ?? '').trim();
+    const dev = db.query('select * from deviations where id = $1 limit 1', [devId]).rows[0];
+    if (!dev) throw new Error(`No deviation ${devId}`);
+    const convo = db.query('select * from conversations where id = $1 limit 1', [
+      dev.conversation_id,
+    ]).rows[0];
+    const turns = db.query(
+      'select * from transcript_turns where conversation_id = $1 order by turn_index',
+      [dev.conversation_id],
+    ).rows;
+
+    // The site is resolved HERE rather than left to the writer, so the narrative
+    // and the record's site field cannot name different buildings.
+    const draft = await draftServiceRequestFor(db, convo, turns, dev);
+
+    return {
+      callId: String(convo?.call_id ?? ''),
+      durationSec: convo?.duration_sec ?? null,
+      callerPhone: String(convo?.caller_phone ?? ''),
+      site: draft.siteName || '',
+      channelSummaryTags: String(convo?.ai_tags ?? ''),
+      transcript: turns
+        .filter((t: any) => String(t.message ?? '').trim())
+        .map((t: any) => ({ at: t.at_offset, who: t.performer, said: t.message })),
+    };
+  },
+});
+
+server.addHandler({
+  name: 'saveSrDraft',
+  description:
+    "Store the service-request-writer's subject and description against a deviation, so the create writes what the model wrote rather than a sliced transcript fragment. Opens a correction row if none exists — a record fix does not require a proposer to have run.",
+  parameters: {
+    deviationId: { description: 'Deviation id', type: 'string' },
+    subject: { description: 'Service request subject', type: 'string' },
+    description: { description: 'Service request description', type: 'string' },
+    category: { description: 'Trade category read off the fault', type: 'string' },
+    missingDetail: { description: 'The detail the call never captured', type: 'string' },
+  },
+  execute: async (args) => {
+    const db = connect();
+    const devId = String(args.deviationId ?? '').trim();
+    const subject = String(args.subject ?? '').trim();
+    const description = String(args.description ?? '').trim();
+
+    // VALIDATED HERE, because the browser is not trusted to have got it right.
+    // These are the two failures that produced SR 210668: a subject that is a
+    // quoted fragment, and a body carrying governance vocabulary.
+    if (!subject || !description) {
+      throw new Error('Rejected: a service request draft needs both a subject and a description.');
+    }
+    if (subject.length > 160) {
+      throw new Error(`Rejected: subject is ${subject.length} characters; a title is not a paragraph.`);
+    }
+    if (/^\s*(hi|hello|hey)\b/i.test(subject) || /\b(uh|um|erm)\b/i.test(subject)) {
+      throw new Error(`Rejected: "${subject}" reads as a quote from the call, not a title.`);
+    }
+    if (/\b(deviation|criterion|DV-|CO-|scope of work|clause S-|proposer|governance)\b/i.test(description)) {
+      throw new Error(
+        'Rejected: the description carries governance language. It is read by a technician, ' +
+          'and must describe the fault only.',
+      );
+    }
+
+    const dev = db.query('select * from deviations where id = $1 limit 1', [devId]).rows[0];
+    if (!dev) throw new Error(`No deviation ${devId}`);
+
+    const corrId = `CO-${devId}`;
+    let corr = db.query('select * from corrections where id = $1 limit 1', [corrId]).rows[0];
+    if (!corr) {
+      db.query(
+        `insert into corrections
+           (id, deviation_id, target, title, rationale, before_text, after_text, state,
+            recommended_action, assignee, cmms_action, proposed_at, applied_at,
+            applied_record_id, applied_write_key)
+         values ($1,$2,'cmms',$3,$4,'','','proposed','','','{}',$5,'','','')`,
+        [
+          corrId,
+          devId,
+          'Raise the service request this call never produced',
+          'The join found no service request for this call.',
+          nowIso(),
+        ],
+      );
+      corr = db.query('select * from corrections where id = $1 limit 1', [corrId]).rows[0];
+    }
+
+    let action: any = {};
+    try {
+      action =
+        typeof corr.cmms_action === 'string'
+          ? JSON.parse(corr.cmms_action || '{}')
+          : corr.cmms_action ?? {};
+    } catch {
+      action = {};
+    }
+    action.srDraft = {
+      subject,
+      description,
+      category: String(args.category ?? '').trim(),
+      missingDetail: String(args.missingDetail ?? '').trim(),
+      writtenAt: nowIso(),
+    };
+    db.query('update corrections set cmms_action=$2 where id=$1', [
+      corrId,
+      JSON.stringify(action),
+    ]);
+
+    return { correctionId: corrId, deviationId: devId, saved: true, subject };
   },
 });
 
