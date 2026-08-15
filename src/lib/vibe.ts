@@ -80,7 +80,7 @@ export interface OverviewMetrics {
   /**
    * The call channel's OWN totals and its split by channel type.
    *
-   * Not derived from what Hue stores — the gap between the two is ingest lag,
+   * Not derived from what Vigil stores — the gap between the two is ingest lag,
    * which is worth seeing. null when the channel is unreachable.
    */
   callStats: { total: number; byType: Record<string, number> } | null;
@@ -194,7 +194,7 @@ function toTurn(r: TranscriptTurnRow): TurnWithToolIO {
 }
 
 /**
- * A conversation plus the three things Hue stores that the frozen contract has
+ * A conversation plus the three things Vigil stores that the frozen contract has
  * no room for: the tool arguments and results on each turn, the caller's
  * opening line, and how many findings the call carries. It widens
  * `Conversation` rather than replacing it, so anything typed against the
@@ -314,7 +314,7 @@ export function toDeviation(r: DeviationRow): Deviation {
 }
 
 /**
- * Evidence, provenance and the joined call fields are Hue's own — not part of
+ * Evidence, provenance and the joined call fields are Vigil's own — not part of
  * the frozen contract — so they ride alongside the contract type rather than
  * being bolted into it.
  */

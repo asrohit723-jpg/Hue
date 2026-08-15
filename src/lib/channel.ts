@@ -4,7 +4,7 @@
  * Wording only — the channel itself is recorded at ingest and derived once on
  * the server (`channelOf`), so nothing here decides anything.
  *
- * Hue called every conversation "a call" until now, which was wrong in a way
+ * Vigil called every conversation "a call" until now, which was wrong in a way
  * you could see: a WEB conversation's email address sat under a heading that
  * said phone number.
  */

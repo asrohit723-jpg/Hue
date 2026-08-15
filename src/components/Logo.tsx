@@ -1,5 +1,5 @@
 /**
- * The Hue mark: one disc, three bands of the palette.
+ * The Vigil mark: one disc, three bands of the palette.
  *
  * Chosen over the alternatives for one reason — it has to read at 28px in the
  * header AND as the only mark on a 64px collapsed rail. Concentric arcs muddy
@@ -19,7 +19,7 @@ export function Logo({ size = 32 }: { size?: number }) {
       height={size}
       viewBox="0 0 32 32"
       role="img"
-      aria-label="Hue"
+      aria-label="Vigil"
       style={{ display: 'block', flex: `0 0 ${size}px` }}
     >
       {/* The disc clips the bands, so the edge stays a true circle at any size

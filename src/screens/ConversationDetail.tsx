@@ -1239,7 +1239,7 @@ function ScoreTab({
       <p style={{ margin: 0, fontSize: 11, color: 'var(--ink-500)', lineHeight: '16px' }}>
         {/* These three describe the audio pipeline, which no transcript can show.
             The analyst is instructed to refuse them rather than estimate. */}
-        Latency, speech-to-text and text-to-speech are properties of the audio, which Hue never
+        Latency, speech-to-text and text-to-speech are properties of the audio, which Vigil never
         hears — they stay unmeasured rather than estimated.
         {!analysis && ' Run evals to score response quality.'}
       </p>

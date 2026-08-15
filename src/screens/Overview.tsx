@@ -645,7 +645,7 @@ export function Overview({
             <path d="M12 8h.01" />
           </svg>
           <p style={{ margin: 0, fontSize: 13, lineHeight: '20px', color: 'var(--ink-700)', textWrap: 'pretty' }}>
-            Hue checks what your agent told each caller against what actually happened in your
+            Vigil checks what your agent told each caller against what actually happened in your
             CMMS. Nothing here is graded yet — start in{' '}
             <button
               className="hue-btn"
@@ -821,7 +821,7 @@ export function Overview({
           value={String(v.metrics.corrections)}
           sub={`all time, ${v.metrics.verified} verified`}
         />
-        {/* The CHANNEL's own count, not Hue's. The two can differ while ingest
+        {/* The CHANNEL's own count, not Vigil's. The two can differ while ingest
             is behind, and that gap is worth seeing rather than smoothing over —
             so this says where the number came from. */}
         <Kpi

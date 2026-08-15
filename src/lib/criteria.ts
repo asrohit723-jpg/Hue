@@ -109,7 +109,7 @@ export function sowHasClause(body: string, clauseRef: string): boolean {
 /**
  * The wired criteria whose clause is not in the scope of work on file.
  *
- * An empty list is the healthy state: every rule Hue enforces can be traced to
+ * An empty list is the healthy state: every rule Vigil enforces can be traced to
  * a line of the contract. A non-empty one is a real finding about the CONTRACT,
  * not about the app — the criteria were written against a fuller document than
  * the one that was pasted.

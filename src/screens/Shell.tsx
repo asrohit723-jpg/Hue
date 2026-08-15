@@ -317,7 +317,7 @@ export function Shell({ me }: { me: CurrentUser }) {
               onClick={toggleRail}
               aria-expanded={false}
               aria-label="Expand the sidebar"
-              title="Hue · expand the sidebar"
+              title="Vigil · expand the sidebar"
               style={{
                 border: 'none',
                 background: 'transparent',
@@ -341,7 +341,7 @@ export function Shell({ me }: { me: CurrentUser }) {
                 minWidth: 0,
               }}
             >
-              <span style={{ fontWeight: 600, fontSize: 15, lineHeight: '18px' }}>Hue</span>
+              <span style={{ fontWeight: 600, fontSize: 15, lineHeight: '18px' }}>Vigil</span>
               <span style={{ fontSize: 12, color: 'var(--ink-500)', lineHeight: '14px' }}>
                 Helpdesk governance
               </span>

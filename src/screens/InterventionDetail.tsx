@@ -1128,7 +1128,7 @@ function FixTheAgent({
               {/* `reference` is set whenever a stored scope of work was read,
                   whether or not the clause turned up in it. Keying off `text`
                   said "not available" for a clause that is simply not in a
-                  document Hue read perfectly well — two different facts, and
+                  document Vigil read perfectly well — two different facts, and
                   only one of them is a failure to read anything. */}
               Current —{' '}
               {currentClause?.source === 'agent_prompt'

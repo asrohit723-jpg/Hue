@@ -1,5 +1,5 @@
 /**
- * Schema migration for the Hue app database.
+ * Schema migration for the Vigil app database.
  *
  * `facilio vibe db` exposes only CSV import, so DDL has to run through a
  * handler. Every statement is CREATE ... IF NOT EXISTS, making the whole
@@ -164,7 +164,7 @@ function connect() {
 
 server.addHandler({
   name: 'up',
-  description: 'Create every Hue table and index. Idempotent.',
+  description: 'Create every Vigil table and index. Idempotent.',
   parameters: {},
   execute: async () => {
     const db = connect();

@@ -491,7 +491,7 @@ export function ScopeEvals({ search = '' }: { search?: string }) {
                   flexWrap: 'wrap',
                 }}
               >
-                <span>Not stored in Hue</span>
+                <span>Not stored in Vigil</span>
                 <span
                   style={{
                     display: 'flex',
@@ -762,7 +762,7 @@ export function ScopeEvals({ search = '' }: { search?: string }) {
                   </p>
                   <p style={{ margin: '12px 0 0' }}>
                     Paste it with <b style={{ color: 'var(--ink-900)', fontWeight: 500 }}>Edit
-                    document</b>. Hue stores it, writes evals from it, and grades every conversation
+                    document</b>. Vigil stores it, writes evals from it, and grades every conversation
                     against those alongside the seeded ones.
                   </p>
                 </>

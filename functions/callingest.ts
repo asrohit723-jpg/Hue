@@ -1,5 +1,5 @@
 /**
- * Hue — live call ingest from the helpdesk-call-logs connection.
+ * Vigil — live call ingest from the helpdesk-call-logs connection.
  *
  * The connection is the default and only source for live calls. It is
  * read-only and reached through the connections service, which injects the
@@ -152,7 +152,7 @@ function offsetFrom(startMs: number, atMs: unknown): string {
  * request that already exists, and is not evidence the agent created one.
  *
  * null is a real finding, not an error — the agent promising a ticket and
- * naming no number is precisely what Hue is looking for.
+ * naming no number is precisely what Vigil is looking for.
  */
 function spokenSrNumber(turns: Array<{ performer: string; message: string }>): string | null {
   const ordered = [
@@ -217,7 +217,7 @@ function claimsRequest(
 // is how a WEB conversation ended up with an email address in caller_phone,
 // rendered under a heading that says phone number.
 //
-// Hue never filtered by channel. The `type=CALL` filter lives in the
+// Vigil never filtered by channel. The `type=CALL` filter lives in the
 // connection's own action definition, server-side, and there is no parameter
 // to widen it (see docs/platform-ask-text-channels.md). So this does not
 // "remove a filter" — it stops ASSUMING voice, and records what it is told.
@@ -312,7 +312,7 @@ function writeConversationChannel(
  * text conversation to test it against. A parser guessed at from an imagined
  * format is worse than no parser: it would produce a confident WRONG join, and
  * a wrong join is indistinguishable from the agent inventing a reference —
- * exactly the failure Hue exists to catch. With null, a text conversation gets
+ * exactly the failure Vigil exists to catch. With null, a text conversation gets
  * no claimed number, its join is recorded as `not_checked`, and every check
  * that reads the CMMS record is marked not-applicable rather than failed.
  *

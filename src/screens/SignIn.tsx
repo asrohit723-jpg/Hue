@@ -70,7 +70,7 @@ export function SignIn({ onSignIn, error }: { onSignIn: () => void; error?: stri
                 A
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.15 }}>
-                <span style={{ fontWeight: 600, fontSize: 15 }}>Hue</span>
+                <span style={{ fontWeight: 600, fontSize: 15 }}>Vigil</span>
                 <span style={{ fontSize: 12, color: 'var(--ink-500)' }}>Helpdesk voice agent</span>
               </div>
             </div>
@@ -84,7 +84,7 @@ export function SignIn({ onSignIn, error }: { onSignIn: () => void; error?: stri
                 letterSpacing: '-.01em',
               }}
             >
-              Sign in to Hue
+              Sign in to Vigil
             </h1>
             <p style={{ margin: '8px 0 0', color: 'var(--ink-600)', textWrap: 'pretty' }}>
               Governance and evidence for your AI helpdesk agent. Sign in with the Facilio account
@@ -150,7 +150,7 @@ export function SignIn({ onSignIn, error }: { onSignIn: () => void; error?: stri
                   textWrap: 'pretty',
                 }}
               >
-                You'll be redirected to Facilio to authenticate, then returned here. Hue reads the
+                You'll be redirected to Facilio to authenticate, then returned here. Vigil reads the
                 sites and service requests your account already has access to — it never asks for
                 CMMS credentials of its own.
               </p>

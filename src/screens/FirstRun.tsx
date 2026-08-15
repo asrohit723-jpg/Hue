@@ -15,7 +15,7 @@ export function FirstRun({ sites }: { sites: string[] }) {
       detail:
         sites.length > 0
           ? `Reading ground truth from ${sites.length} ${sites.length === 1 ? 'site' : 'sites'}: ${sites.slice(0, 3).join(', ')}${sites.length > 3 ? '…' : ''}.`
-          : 'Hue reads service requests and sites from your CMMS to check what the agent actually did.',
+          : 'Vigil reads service requests and sites from your CMMS to check what the agent actually did.',
       cta: sites.length > 0 ? 'Connected' : 'Connect',
     },
     {
@@ -24,7 +24,7 @@ export function FirstRun({ sites }: { sites: string[] }) {
       status: 'Pending',
       done: false,
       detail:
-        'Paste the SOW. Hue derives eval criteria from its clauses — deterministic checks run as code, judgement calls go to a model. You can edit every criterion before it grades anything.',
+        'Paste the SOW. Vigil derives eval criteria from its clauses — deterministic checks run as code, judgement calls go to a model. You can edit every criterion before it grades anything.',
       cta: 'Add SOW',
     },
     {
@@ -33,7 +33,7 @@ export function FirstRun({ sites }: { sites: string[] }) {
       status: 'Pending',
       done: false,
       detail:
-        'Once the SOW is in, Hue grades your recorded calls against it and joins each one to its CMMS record.',
+        'Once the SOW is in, Vigil grades your recorded calls against it and joins each one to its CMMS record.',
       cta: 'Run',
     },
   ];

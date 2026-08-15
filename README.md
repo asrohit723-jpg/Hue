@@ -1,4 +1,4 @@
-# Hue
+# Vigil
 Governance & observability layer for the AI Helpdesk voice agent — "Langfuse for clients".
 Reads every call, joins it to the actual CMMS record, scores it against the SOW, flags
 deviations, and runs a propose → approve → apply correction loop. Built as a Facilio Vibe app.

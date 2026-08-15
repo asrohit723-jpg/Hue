@@ -1,15 +1,15 @@
 /**
- * Hue — governance engine.
+ * Vigil — governance engine.
  *
  * SINGLE SOURCE OF TRUTH: the CMMS. Every service request, site, category and
  * status in this file is fetched live from `facilio-cmms` at call time. The app
- * database holds only transcripts (the claim) and Hue's own findings. There is
+ * database holds only transcripts (the claim) and Vigil's own findings. There is
  * no cached copy of a CMMS record anywhere below, deliberately — a ground-truth
  * check that reads a copy is not a ground-truth check.
  *
  * NO AGENT CALLS LIVE IN THIS FILE, AND NONE MAY BE ADDED.
  *
- * A Studio Function's fetch aborts at ~10s. Every agent Hue uses runs longer
+ * A Studio Function's fetch aborts at ~10s. Every agent Vigil uses runs longer
  * than that on real input — measured 10.8s to 33.8s — so an agent called from
  * here does not run slowly, it fails. Worse, it fails as a timeout, which is
  * indistinguishable from "the model had nothing to say" unless every caller is
@@ -141,8 +141,8 @@ function callRecordOf(payload: any): any {
 }
 
 /**
- * Map a connection performer onto Hue's vocabulary. The connection says
- * USER / AGENT / SYSTEM; Hue's transcripts say caller / agent / system, so a
+ * Map a connection performer onto Vigil's vocabulary. The connection says
+ * USER / AGENT / SYSTEM; Vigil's transcripts say caller / agent / system, so a
  * live turn reads identically to a seeded one.
  */
 function toPerformer(raw: unknown): string {
@@ -170,7 +170,7 @@ function offsetFrom(startMs: number, atMs: unknown): string {
  * swallowing phone numbers or times.
  *
  * Returning null is a real result, not a failure: a call where the agent
- * promised a ticket and named no number is exactly the case Hue exists to
+ * promised a ticket and named no number is exactly the case Vigil exists to
  * catch.
  */
 function spokenSrNumber(turns: Array<{ performer: string; message: string }>): string | null {
@@ -258,7 +258,7 @@ function agentClaim(turns: Array<{ performer: string; message: string; at_offset
   return { claimed, number: number ?? null, quotes, admittedFailure };
 }
 
-/** The connection's satisfactionLevel, mapped onto Hue's sentiment enum. */
+/** The connection's satisfactionLevel, mapped onto Vigil's sentiment enum. */
 function toSentiment(level: unknown): string {
   const s = String(level ?? '').toUpperCase();
   // Order matters: VERY_DISSATISFIED contains DISSATISFIED, which contains
@@ -291,7 +291,7 @@ function toSentiment(level: unknown): string {
  * property is the failure mode: if every attempt fails this THROWS. It must
  * never return a pass-shaped result, because "the judge timed out" and "the
  * judge found nothing wrong" are opposite facts and silently conflating them
- * would hide real deviations — the exact failure Hue exists to catch.
+ * would hide real deviations — the exact failure Vigil exists to catch.
  *
  * There is no sleep between attempts: the sandbox has no timers, and each
  * attempt already takes seconds, which is the backoff.
@@ -351,7 +351,7 @@ function readGrade(row: any) {
 // ---------------------------------------------------------------------------
 // The scope of work, and the evals generated from it
 //
-// Hue grades against a SOW. Until now that SOW existed only as a seeded list of
+// Vigil grades against a SOW. Until now that SOW existed only as a seeded list of
 // criteria in the bundle — written by hand, agreeing with the real scope of
 // work by luck rather than by construction.
 //
@@ -763,7 +763,7 @@ server.addHandler({
 });
 
 // ---------------------------------------------------------------------------
-// Transcript ingest — the only thing Hue stores of its own about a call
+// Transcript ingest — the only thing Vigil stores of its own about a call
 // ---------------------------------------------------------------------------
 
 server.addHandler({
@@ -929,7 +929,7 @@ async function gradeConversation(convoId: string) {
     // real text data to test against. Falling through to the site+time window
     // would be worse than doing nothing: it guesses, and a guessed join is
     // indistinguishable from the agent inventing a reference, which is the
-    // exact failure Hue exists to catch. 'not_checked' is neither a match nor
+    // exact failure Vigil exists to catch. 'not_checked' is neither a match nor
     // "no record" — it is the truth, that nobody looked.
     // THE RECORD HUE ITSELF RAISED counts as a record.
     //
@@ -966,7 +966,7 @@ async function gradeConversation(convoId: string) {
       // Critically, there is no fallback from here. If the record the agent
       // named does not exist, that absence IS the finding — guessing a
       // plausible nearby record would manufacture a join the agent never made
-      // and hide the very failure Hue exists to catch.
+      // and hide the very failure Vigil exists to catch.
       const byId = await cmms('list-service-requests', {
         page_size: 1,
         page: 1,
@@ -1594,7 +1594,7 @@ function releaseGradeClaim(db: any, convoId: string, by: string) {
  * this is here to make impossible.
  *
  * Deterministic only. No agent call happens here or can: a Studio Function
- * aborts a fetch at ~10s and every agent Hue uses runs longer. The nudge makes
+ * aborts a fetch at ~10s and every agent Vigil uses runs longer. The nudge makes
  * the SERVER grade sooner; it does not move grading into the browser.
  */
 async function gradeClaimed(by: string, limit: number, budgetMs: number) {
@@ -1815,7 +1815,7 @@ server.addHandler({
 
     // The channel's OWN count of calls, and how they split by channel.
     //
-    // Deliberately not derived from what Hue stores: the gap between the two is
+    // Deliberately not derived from what Vigil stores: the gap between the two is
     // ingest lag, which is worth seeing rather than hiding behind a single
     // number. A channel outage degrades this to null — the dashboard is built
     // from stored findings and must not go down because the phone system did.
@@ -2194,7 +2194,7 @@ server.addHandler({
 server.addHandler({
   name: 'saveSow',
   description:
-    'Store the scope of work Hue grades against, and report whether it CHANGED. Pasted for now; the same handler serves an automatic fetch the day agent 6208 becomes readable.',
+    'Store the scope of work Vigil grades against, and report whether it CHANGED. Pasted for now; the same handler serves an automatic fetch the day agent 6208 becomes readable.',
   parameters: {
     body: { description: 'The SOW text', type: 'string' },
     title: { description: 'What to call this scope of work', type: 'string' },
@@ -3190,7 +3190,7 @@ async function draftServiceRequestFor(
 
   // THE BODY IS THE FAULT. Nothing else.
   //
-  // What went into SR 210668 was Hue talking to itself — the finding id, the
+  // What went into SR 210668 was Vigil talking to itself — the finding id, the
   // criterion, the proposer's reasoning about the agent — with the caller's
   // fault nowhere in it. A technician opening that ticket learns what the
   // governance engine concluded and not what is broken.
@@ -3208,9 +3208,9 @@ async function draftServiceRequestFor(
   const body = ai
     ? ai.description
     : `A fault was reported on call ${callId} and no service request was raised. The call ` +
-      `transcript has not yet been read into a summary — open the call in Hue for the detail.`;
+      `transcript has not yet been read into a summary — open the call in Vigil for the detail.`;
 
-  const description = [body, '', ...details, '', `Raised by Hue from call ${callId}.`]
+  const description = [body, '', ...details, '', `Raised by Vigil from call ${callId}.`]
     .join('\n')
     .slice(0, 2000);
 
@@ -3349,7 +3349,7 @@ server.addHandler({
 
     const stamped =
       `${body.trimEnd()}\n\n` +
-      `[Hue ${nowIso()}] Amended from deviation ${corr.deviation_id} — ${String(corr.title ?? 'correction')}.\n` +
+      `[Vigil ${nowIso()}] Amended from deviation ${corr.deviation_id} — ${String(corr.title ?? 'correction')}.\n` +
       addition;
 
     const res = writeSowDocument(db, {
@@ -3590,18 +3590,18 @@ server.addHandler({
             ? addition
             : existing.includes(addition)
               ? existing
-              : `${existing}\n\n[Hue] ${addition}`.slice(0, 2000);
+              : `${existing}\n\n[Vigil] ${addition}`.slice(0, 2000);
         }
         await cmms('update-service-request', {
           id: Number(convo.cmms_sr_id),
           servicerequest: patch,
         });
       }
-      // Always leave an auditable note naming Hue as the author of the change.
+      // Always leave an auditable note naming Vigil as the author of the change.
       await cmms('add-service-request-comment', {
         id: Number(convo.cmms_sr_id),
         commentText:
-          `[Hue governance] ${corr.title || 'Correction applied'}. ` +
+          `[Vigil governance] ${corr.title || 'Correction applied'}. ` +
           `Deviation ${dev.id} (${dev.criterion_id}, ${dev.severity}). ${corr.rationale || ''}`.slice(
             0,
             1000,
@@ -4374,7 +4374,7 @@ server.addHandler({
 /**
  * What the agent is told TODAY about this clause — the "before" of the diff.
  *
- * Hue cannot read agent 6208's live prompt (docs/platform-ask-agent-scope.md),
+ * Vigil cannot read agent 6208's live prompt (docs/platform-ask-agent-scope.md),
  * which is why saveCorrection has always written before_text as ''. An empty
  * box was honest but useless: a diff with no left side is not a diff.
  *
