@@ -498,6 +498,14 @@ export function Overview({
 
   const v = view;
 
+  // FIRST USE. `isFirstRun` above covers an org with no calls at all; this
+  // covers the other empty start — calls have arrived but nothing has been
+  // graded yet, which is what the app looks like before a scope of work exists.
+  // Derived from the rows already loaded, so it clears itself the moment the
+  // first call is evaluated. Nothing is remembered or dismissed.
+  const nothingGradedYet =
+    !!ready && ready.convos.length > 0 && ready.convos.every((c) => c.evalStatus === 'not_evaluated');
+
   function exportExcel() {
     if (!ready) return;
     // A real export of what is on screen — the same filtered rows, nothing
@@ -617,6 +625,48 @@ export function Overview({
           </button>
         </div>
       </div>
+
+      {nothingGradedYet && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 11,
+            padding: '13px 16px',
+            marginBottom: 16,
+            borderRadius: 'var(--radius-lg)',
+            border: '1px solid var(--blue-200)',
+            background: 'var(--blue-025)',
+          }}
+        >
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--blue-600)" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" style={{ flex: '0 0 17px', marginTop: 1 }} aria-hidden="true">
+            <circle cx="12" cy="12" r="10" />
+            <path d="M12 16v-4" />
+            <path d="M12 8h.01" />
+          </svg>
+          <p style={{ margin: 0, fontSize: 13, lineHeight: '20px', color: 'var(--ink-700)', textWrap: 'pretty' }}>
+            Hue checks what your agent told each caller against what actually happened in your
+            CMMS. Nothing here is graded yet — start in{' '}
+            <button
+              className="hue-btn"
+              onClick={() => onNavigate?.('scope')}
+              style={{
+                border: 0,
+                background: 'transparent',
+                padding: 0,
+                font: 'inherit',
+                color: 'var(--blue-600)',
+                fontWeight: 600,
+                cursor: 'pointer',
+                textDecoration: 'underline',
+              }}
+            >
+              Scope &amp; evals
+            </button>{' '}
+            to add your scope of work, which is what the evals are derived from.
+          </p>
+        </div>
+      )}
 
       {/* hero metrics */}
       <div

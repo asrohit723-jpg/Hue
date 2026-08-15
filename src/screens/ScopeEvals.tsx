@@ -104,6 +104,9 @@ export function ScopeEvals({ search = '' }: { search?: string }) {
   const [creating, setCreating] = useState(false);
   const [savingEval, setSavingEval] = useState(false);
   const [evalError, setEvalError] = useState<string | null>(null);
+  // The id is assigned by the server, so it is the one part of a saved eval the
+  // writer cannot predict — which makes it the thing worth confirming.
+  const [evalAdded, setEvalAdded] = useState<{ id: string; updated: boolean } | null>(null);
 
   /**
    * Save a hand-written eval.
@@ -119,9 +122,13 @@ export function ScopeEvals({ search = '' }: { search?: string }) {
     severity: string; layer: string; modality: string;
   }) {
     setEvalError(null);
+    setEvalAdded(null);
     setSavingEval(true);
     try {
-      await api.saveCustomEval({ ...form, savedBy: 'this session' });
+      const saved = await api.saveCustomEval({ ...form, savedBy: 'this session' });
+      // The server decides whether this was a new criterion or a rewrite of one
+      // that already existed, so the word comes from the response, not the form.
+      setEvalAdded({ id: saved.criterionId, updated: saved.updated });
       setCreating(false);
       const current = await api.currentSow();
       setSow(current);
@@ -799,6 +806,26 @@ export function ScopeEvals({ search = '' }: { search?: string }) {
           >
             {creating ? 'Cancel' : '+ New eval'}
           </button>
+
+          {/* What the last save did. Adding an eval ran a write and changed what
+              every future call is graded against, and said nothing. */}
+          {evalAdded && !creating && (
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                fontSize: 12,
+                color: 'var(--success-700)',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+              {evalAdded.updated ? 'Updated' : 'Added'} {evalAdded.id}
+            </span>
+          )}
         </div>
 
         {/* Directly under the button that opens it. Mounted after the list,

@@ -75,6 +75,14 @@ export function Patterns({
   );
   const [error, setError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
+  /**
+   * Which pattern's fix was just written.
+   *
+   * It lives HERE and not in the card because proposing triggers a refetch,
+   * the refetch clears `items`, and the whole list unmounts behind the
+   * skeleton — card-local state would be destroyed before it could be read.
+   */
+  const [proposedFor, setProposedFor] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -201,7 +209,11 @@ export function Patterns({
             key={p.criterionId}
             p={p}
             onOpenDeviation={onOpenDeviation}
-            onProposed={() => setNonce((n) => n + 1)}
+            justProposed={proposedFor === p.criterionId}
+            onProposed={(criterionId) => {
+              setProposedFor(criterionId);
+              setNonce((n) => n + 1);
+            }}
           />
         ))}
 
@@ -255,10 +267,13 @@ function PatternCard({
   p,
   onOpenDeviation,
   onProposed,
+  justProposed,
 }: {
   p: Pattern;
   onOpenDeviation?: (deviationId: string) => void;
-  onProposed?: () => void;
+  onProposed?: (criterionId: string) => void;
+  /** This card's fix was the one just written. Owned by the screen — see below. */
+  justProposed?: boolean;
 }) {
   const [proposing, setProposing] = useState(false);
   const [proposeError, setProposeError] = useState<string | null>(null);
@@ -281,7 +296,7 @@ function PatternCard({
         p.rootCause === 'unknown' ? 'unknown' : p.rootCause,
         JSON.stringify(fix),
       );
-      onProposed?.();
+      onProposed?.(p.criterionId);
     } catch (err) {
       setProposeError(
         err instanceof JudgeTimeout
@@ -548,6 +563,23 @@ function PatternCard({
                 {p.openCount === 1 ? 'intervention' : 'interventions'}
               </span>
             </div>
+            {justProposed && !proposeError && (
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 7,
+                  fontSize: 12,
+                  color: 'var(--success-700)',
+                  lineHeight: '18px',
+                }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+                Fix proposed — open the intervention to review and approve it.
+              </div>
+            )}
             {proposeError && (
               <div style={{ fontSize: 12, color: 'var(--danger-700)', lineHeight: '18px' }}>
                 {proposeError}
