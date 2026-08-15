@@ -829,7 +829,6 @@ export function InterventionDetail({
           agentFix={agentFix}
           onAnalyse={analyse}
           onApprove={approveSowFix}
-          onVerify={() => run('verifyCorrection', { correctionId: corr?.id ?? `CO-${dev.id}` }, 'verify')}
         />
 
         <FixTheRecord
@@ -843,6 +842,15 @@ export function InterventionDetail({
           onWrite={() =>
             run('approveCorrection', { correctionId: corr?.id ?? `CO-${dev.id}` }, 'approve')
           }
+        />
+
+        {/* Last, because it is the outcome of the two above rather than a step
+            inside either. Renders nothing until something has actually been
+            applied. */}
+        <CorrectionProgress
+          corr={corr}
+          act={act}
+          onVerify={() => run('verifyCorrection', { correctionId: corr?.id ?? `CO-${dev.id}` }, 'verify')}
         />
       </div>
     </div>
@@ -987,7 +995,6 @@ function FixTheAgent({
   currentClause,
   agentFix,
   onApprove,
-  onVerify,
 }: {
   dev: DeviationWithEvidence;
   corr: CorrectionRecord | null;
@@ -1001,23 +1008,9 @@ function FixTheAgent({
   /** Whether a scope-of-work fix is the right instrument for this finding. */
   agentFix: { warranted: boolean; reason: string } | null;
   onApprove: () => void;
-  onVerify: () => void;
 }) {
   const state = corr?.state ?? null;
-  const isRunning = state !== null && STEP_ORDER.indexOf(state) >= 0;
-  const isResolved = state === 'resolved';
   const showActions = state === 'proposed' || state === null;
-
-  const cur = STEP_ORDER.indexOf(state ?? '');
-  const steps = [
-    {
-      title: 'Applied',
-      detail: corr?.title ? `${corr.title} — ${corr.target ?? 'agent'}` : 'The correction is written to its target',
-      at: corr?.appliedAt ? 'done' : '',
-    },
-    { title: 'Verifying', detail: 'Re-reading the CMMS record the correction touched', at: state === 'applied' ? 'queued' : '' },
-    { title: 'Resolved', detail: 'The record now satisfies the criterion', at: isResolved ? 'complete' : '' },
-  ].map((s, i) => ({ ...s, ...stepStyle(cur > i ? 'done' : cur === i ? 'active' : 'todo') }));
 
   return (
     <div
@@ -1284,6 +1277,115 @@ function FixTheAgent({
           </div>
         )}
 
+        {act.timeout && (
+          <div
+            style={{
+              background: 'var(--warning-050)',
+              border: '1px solid var(--warning-500)',
+              borderRadius: 'var(--radius-sm)',
+              padding: '12px 14px',
+            }}
+          >
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--warning-700)" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="9" />
+                <path d="M12 7v5l3 2" />
+              </svg>
+              <span style={{ fontWeight: 600, color: 'var(--warning-700)' }}>
+                Couldn't complete — the judge timed out
+              </span>
+            </div>
+            <p style={{ margin: '6px 0 0', fontSize: 13, color: 'var(--warning-700)', lineHeight: '19px', textWrap: 'pretty' }}>
+              <strong>This is not a verdict</strong> — nothing has been decided about this finding,
+              and nothing was written. Retry, or leave it and come back.
+            </p>
+          </div>
+        )}
+
+        {act.error && (
+          <div
+            style={{
+              background: 'var(--danger-050)',
+              border: '1px solid var(--danger-500)',
+              borderRadius: 'var(--radius-sm)',
+              padding: '12px 14px',
+            }}
+          >
+            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--danger-700)' }}>
+              That step failed
+            </div>
+            <p style={{ margin: '6px 0 0', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--danger-700)', wordBreak: 'break-word' }}>
+              {act.error}
+            </p>
+          </div>
+        )}
+      </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * What became of the correction — applied, verifying, resolved.
+ *
+ * It sits BELOW both fix panels because it is the outcome of either of them,
+ * not a step inside one. Between the two it read as though the progression
+ * belonged to the agent-side fix alone, when "Applied" is just as often the
+ * CMMS write from Fix the record, and "Verifying" re-reads that record.
+ *
+ * Same states, same button, same handler. Only its place in the column moved.
+ */
+function CorrectionProgress({
+  corr,
+  act,
+  onVerify,
+}: {
+  corr: CorrectionRecord | null;
+  act: ActionState;
+  onVerify: () => void;
+}) {
+  const state = corr?.state ?? null;
+  const isRunning = state !== null && STEP_ORDER.indexOf(state) >= 0;
+  const isResolved = state === 'resolved';
+
+  // Nothing has happened yet: no card, rather than an empty one claiming a
+  // progression that has not started.
+  if (!isRunning && !isResolved) return null;
+
+  const cur = STEP_ORDER.indexOf(state ?? '');
+  const steps = [
+    {
+      title: 'Applied',
+      detail: corr?.title ? `${corr.title} — ${corr.target ?? 'agent'}` : 'The correction is written to its target',
+      at: corr?.appliedAt ? 'done' : '',
+    },
+    { title: 'Verifying', detail: 'Re-reading the CMMS record the correction touched', at: state === 'applied' ? 'queued' : '' },
+    { title: 'Resolved', detail: 'The record now satisfies the criterion', at: isResolved ? 'complete' : '' },
+  ].map((s, i) => ({ ...s, ...stepStyle(cur > i ? 'done' : cur === i ? 'active' : 'todo') }));
+
+  return (
+    <div
+      style={{
+        background: 'var(--surface-card)',
+        border: '1px solid var(--border-default)',
+        borderRadius: 'var(--radius-lg)',
+        overflow: 'hidden',
+      }}
+    >
+      <div
+        style={{
+          padding: '13px 20px',
+          borderBottom: '1px solid var(--border-default)',
+          background: 'var(--surface-sunken)',
+        }}
+      >
+        <h3 style={{ fontSize: 14, fontWeight: 600, margin: 0 }}>Outcome</h3>
+        <div style={{ fontSize: 11, color: 'var(--ink-600)', marginTop: 1 }}>
+          What became of the fix, and whether the record agrees
+        </div>
+      </div>
+
+      <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
         {isRunning && (
           <div style={{ border: '1px solid var(--border-default)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
             {steps.map((s) => (
@@ -1359,50 +1461,7 @@ function FixTheAgent({
           </div>
         )}
 
-        {act.timeout && (
-          <div
-            style={{
-              background: 'var(--warning-050)',
-              border: '1px solid var(--warning-500)',
-              borderRadius: 'var(--radius-sm)',
-              padding: '12px 14px',
-            }}
-          >
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--warning-700)" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="9" />
-                <path d="M12 7v5l3 2" />
-              </svg>
-              <span style={{ fontWeight: 600, color: 'var(--warning-700)' }}>
-                Couldn't complete — the judge timed out
-              </span>
-            </div>
-            <p style={{ margin: '6px 0 0', fontSize: 13, color: 'var(--warning-700)', lineHeight: '19px', textWrap: 'pretty' }}>
-              <strong>This is not a verdict</strong> — nothing has been decided about this finding,
-              and nothing was written. Retry, or leave it and come back.
-            </p>
-          </div>
-        )}
-
-        {act.error && (
-          <div
-            style={{
-              background: 'var(--danger-050)',
-              border: '1px solid var(--danger-500)',
-              borderRadius: 'var(--radius-sm)',
-              padding: '12px 14px',
-            }}
-          >
-            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--danger-700)' }}>
-              That step failed
-            </div>
-            <p style={{ margin: '6px 0 0', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--danger-700)', wordBreak: 'break-word' }}>
-              {act.error}
-            </p>
-          </div>
-        )}
       </div>
-      )}
     </div>
   );
 }
