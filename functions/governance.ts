@@ -4558,6 +4558,114 @@ server.addHandler({
 });
 
 server.addHandler({
+  name: 'rewriteServiceRequest',
+  description:
+    "Replace the subject and description of a service request Vigil itself raised with the written draft. Uses update-service-request — it never creates a second record. Refuses to touch a description Vigil did not author.",
+  parameters: { deviationId: { description: 'Deviation id', type: 'string' } },
+  execute: async (args) => {
+    // WHY THIS IS NOT approveCorrection's UPDATE PATH.
+    //
+    // That path APPENDS, and deliberately: "a correction adds what the agent
+    // failed to record, and must never replace what is already on the record —
+    // the fault description is the caller's own account of the problem." That
+    // rule is right, and it is the wrong rule here. The description on 210668 is
+    // not the caller's account; it is Vigil's own governance meta, written by
+    // Vigil, and appending to it would leave the useless text in place and add
+    // the good text underneath.
+    //
+    // So this replaces, and earns the right to by checking whose words they are
+    // first. Text this app did not write is never overwritten.
+    const db = connect();
+    const devId = String(args.deviationId ?? '').trim();
+    const dev = db.query('select * from deviations where id = $1 limit 1', [devId]).rows[0];
+    if (!dev) throw new Error(`No deviation ${devId}`);
+    const convo = db.query('select * from conversations where id = $1 limit 1', [
+      dev.conversation_id,
+    ]).rows[0];
+    const turns = db.query(
+      'select * from transcript_turns where conversation_id = $1 order by turn_index',
+      [dev.conversation_id],
+    ).rows;
+
+    const recordId = String(convo?.cmms_sr_id ?? '').trim();
+    if (!recordId) {
+      throw new Error(
+        `Call ${dev.conversation_id} has no service request to rewrite. Use the create path instead.`,
+      );
+    }
+
+    const corr = db.query('select * from corrections where id = $1 limit 1', [`CO-${devId}`])
+      .rows[0];
+    if (!srDraftOf(corr)) {
+      throw new Error(
+        'Nothing written for this call yet — the service-request writer has to run before its ' +
+          'words can be put on the record.',
+      );
+    }
+    const draft = await draftServiceRequestFor(db, convo, turns, dev, corr);
+
+    // Live, because the record may have been edited by a person since.
+    const current = rowsOf(
+      await cmms('list-service-requests', {
+        page_size: 1,
+        page: 1,
+        filters: `id(equals)=${recordId}`,
+      }),
+    )[0];
+    if (!current) {
+      throw new Error(`Service request ${recordId} no longer exists in the CMMS. Nothing rewritten.`);
+    }
+
+    const wasSubject = String(current.subject ?? '');
+    const wasDescription = String(current.description ?? '');
+
+    if (wasSubject === draft.subject && wasDescription === draft.description) {
+      return {
+        recordId,
+        changed: false,
+        reason: 'The record already carries this subject and description.',
+        subject: wasSubject,
+      };
+    }
+
+    // The provenance line every record this app raises carries. Its absence
+    // means somebody else wrote this description, and somebody else's words are
+    // not ours to replace. Both names are accepted — records raised before the
+    // rename say Hue.
+    const authoredHere = /Raised by (Hue|Vigil)\b/i.test(wasDescription);
+    if (!authoredHere) {
+      throw new Error(
+        `Refusing to rewrite service request ${recordId}: its description carries no Vigil ` +
+          'provenance line, so it was written by someone else. Only a description this app ' +
+          'authored is replaced.',
+      );
+    }
+
+    await cmms('update-service-request', {
+      id: Number(recordId),
+      servicerequest: {
+        subject: draft.subject.slice(0, 255),
+        description: draft.description,
+      },
+    });
+
+    await cmms('add-service-request-comment', {
+      id: Number(recordId),
+      commentText:
+        `[Vigil governance] Subject and description rewritten from the call transcript. ` +
+        `The original text was raised automatically and did not describe the fault.`.slice(0, 1000),
+    });
+
+    return {
+      recordId,
+      changed: true,
+      was: { subject: wasSubject, description: wasDescription },
+      now: { subject: draft.subject, description: draft.description },
+    };
+  },
+});
+
+server.addHandler({
   name: 'srDraftContext',
   description:
     'Everything the service-request-writer needs to write the record one call should have produced: the transcript, the caller, and the site the call resolved to. No model call — the writing happens in the browser.',
