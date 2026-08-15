@@ -87,17 +87,35 @@ function NavItem({
       title={mini ? label : undefined}
       aria-label={mini ? label : undefined}
       style={{
+        position: 'relative',
         display: 'flex',
         alignItems: 'center',
         justifyContent: mini ? 'center' : 'flex-start',
         gap: 10,
-        padding: mini ? '8px 0' : '8px 10px',
+        height: 34,
+        padding: mini ? '0' : '0 10px',
         borderRadius: 'var(--radius-sm)',
         cursor: 'pointer',
         fontWeight: 500,
         ...navTone(active),
       }}
     >
+      {/* The active marker: a 3px accent rule on the leading edge, so the
+          current screen is identifiable by position as well as by tint. */}
+      {active && (
+        <span
+          aria-hidden="true"
+          style={{
+            position: 'absolute',
+            left: 0,
+            top: 6,
+            bottom: 6,
+            width: 3,
+            borderRadius: 'var(--radius-pill)',
+            background: 'var(--blue-500)',
+          }}
+        />
+      )}
       <span
         style={{
           width: 26,
@@ -266,11 +284,12 @@ export function Shell({ me }: { me: CurrentUser }) {
       }}
     >
       {/* ---------------- SIDEBAR ---------------- */}
-      <div
+      <nav
+        aria-label="Primary"
         className="hue-rail"
         style={{
-          width: mini ? 64 : 236,
-          flex: `0 0 ${mini ? 64 : 236}px`,
+          width: mini ? 64 : 240,
+          flex: `0 0 ${mini ? 64 : 240}px`,
           background: 'var(--surface-card)',
           borderRight: '1px solid var(--border-default)',
           display: 'flex',
@@ -343,9 +362,9 @@ export function Shell({ me }: { me: CurrentUser }) {
             title="Collapse the sidebar"
             style={{
               marginLeft: 'auto',
-              width: 28,
-              height: 28,
-              flex: '0 0 28px',
+              width: 32,
+              height: 32,
+              flex: '0 0 32px',
               borderRadius: 'var(--radius-sm)',
               border: '1px solid var(--border-default)',
               background: 'var(--surface-card)',
@@ -583,16 +602,19 @@ export function Shell({ me }: { me: CurrentUser }) {
             </button>
           </div>
         </div>
-      </div>
+      </nav>
 
       {/* ---------------- MAIN ---------------- */}
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         {/* TOP BAR — three zones, each carrying something real:
              the section you are in, the search, and the state of the data. */}
-        <div
+        <header
           style={{
             height: HEADER_H,
             flex: `0 0 ${HEADER_H}px`,
+            position: 'sticky',
+            top: 0,
+            zIndex: 10,
             background: 'var(--surface-card)',
             borderBottom: '1px solid var(--border-default)',
             display: 'flex',
@@ -692,14 +714,14 @@ export function Shell({ me }: { me: CurrentUser }) {
                 invented when the read failed. */}
             {sync && (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', lineHeight: 1.3 }}>
-                <span style={{ fontSize: 12, color: 'var(--ink-700)', whiteSpace: 'nowrap' }}>
+                <span style={{ fontSize: 13, color: 'var(--ink-900)', whiteSpace: 'nowrap' }}>
                   {sync.stored} call{sync.stored === 1 ? '' : 's'} ·{' '}
                   <b style={{ fontWeight: 600, color: sync.openDeviations ? 'var(--danger-500)' : 'var(--ink-700)' }}>
                     {sync.openDeviations}
                   </b>{' '}
                   open
                 </span>
-                <span style={{ fontSize: 11, color: 'var(--ink-500)', whiteSpace: 'nowrap' }}>
+                <span style={{ fontSize: 12, color: 'var(--ink-700)', whiteSpace: 'nowrap' }}>
                   {!sync.reachable
                     ? 'Call channel unreachable'
                     : sync.awaitingIngest
@@ -761,10 +783,10 @@ export function Shell({ me }: { me: CurrentUser }) {
               {refreshing ? 'Refreshing…' : 'Refresh'}
             </button>
           </div>
-        </div>
+        </header>
 
         {/* SCROLL AREA */}
-        <div style={{ flex: 1, overflowY: 'auto' }}>
+        <main style={{ flex: 1, overflowY: 'auto' }}>
           {screen === 'overview' && (
             // Remounted by a refresh: Overview holds no typing or filters worth
             // preserving, and its counts are the first thing a pull changes.
@@ -807,7 +829,7 @@ export function Shell({ me }: { me: CurrentUser }) {
           )}
           {screen === 'patterns' && <Patterns onOpenDeviation={openDeviation} />}
           {screen === 'scope' && <ScopeEvals search={query} />}
-        </div>
+        </main>
       </div>
     </div>
   );

@@ -12,7 +12,7 @@ import { LoadError } from '../components/Chrome';
 import criteriaSeed from '../../evals/criteria.seed.json';
 import { WIRED_CRITERIA, layerOf } from '../lib/criteria';
 
-import { avatarColor, clock, duration, evalTone, initials, label, sentimentTone } from '../lib/tone';
+import { clock, duration, evalTone, initials, label, sentimentTone } from '../lib/tone';
 import { gradingDetail, gradingLabel, gradingTone, inFlight } from '../lib/grading';
 import {
   channelLabel,
@@ -483,8 +483,12 @@ export function ConversationDetail({
             height: 40,
             flex: '0 0 40px',
             borderRadius: 'var(--radius-pill)',
-            background: c.srRecordId ? avatarColor(name) : 'var(--danger-500)',
-            color: 'var(--surface-card)',
+            // Neutral. This is an identity glyph, and colouring it red made
+            // every call with no resolved record look like an incident before
+            // anyone had read a word of it. The missing record is reported by
+            // the panel that checked for it.
+            background: 'var(--ink-100)',
+            color: 'var(--ink-700)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -1087,11 +1091,12 @@ function QualityCard({
               flex: 1,
               height: 36,
               border: 'none',
-              background: tab === k ? 'var(--blue-025)' : 'transparent',
+              borderBottom: `2px solid ${tab === k ? 'var(--blue-500)' : 'transparent'}`,
+              borderRadius: 0,
+              background: 'transparent',
               color: tab === k ? 'var(--blue-600)' : 'var(--ink-600)',
               fontWeight: 600,
               fontSize: 13,
-              borderRadius: 'var(--radius-sm)',
               cursor: 'pointer',
             }}
           >
@@ -1794,9 +1799,11 @@ function CmmsPanel({
               style={{
                 height: 34,
                 borderRadius: 'var(--radius-sm)',
-                border: '1px solid var(--danger-500)',
-                background: 'var(--danger-500)',
-                color: 'var(--surface-card)',
+                // Navigation, not destruction: this opens a screen, it does not
+                // act on the CMMS. Red said "careful" about a link.
+                border: '1px solid var(--border-default)',
+                background: 'var(--surface-card)',
+                color: 'var(--ink-900)',
                 fontWeight: 500,
                 fontSize: 13,
                 cursor: 'pointer',

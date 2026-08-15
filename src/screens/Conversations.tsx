@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, type ConversationView } from '../lib/vibe';
 import { BootSkeleton } from './BootSkeleton';
 import { LoadError } from '../components/Chrome';
-import { avatarColor, clock, duration, evalTone, initials, label, sentimentTone } from '../lib/tone';
+import { clock, duration, evalTone, initials, label, sentimentTone } from '../lib/tone';
 // `inFlight` only — the grading STAGE is shown on the conversation record, not
 // here. It still drives the poll below, which refreshes the result cell when a
 // call finishes grading.
@@ -482,7 +482,9 @@ function CallRow({ c, onOpen }: { c: ConversationView; onOpen: () => void }) {
   const name = c.callerLabel;
   // The design tints the avatar by whether a record exists — the same red that
   // marks a missing service request everywhere else in the app.
-  const avatarBg = c.srRecordId ? avatarColor(name) : 'var(--danger-500)';
+  // Neutral: an identity glyph, not a status light. A call whose record is
+  // missing is reported by the Result column, which is what checked.
+  const avatarBg = 'var(--ink-100)';
 
   return (
     <div
@@ -534,7 +536,7 @@ function CallRow({ c, onOpen }: { c: ConversationView; onOpen: () => void }) {
             flex: '0 0 32px',
             borderRadius: 'var(--radius-pill)',
             background: avatarBg,
-            color: 'var(--surface-card)',
+            color: 'var(--ink-700)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
