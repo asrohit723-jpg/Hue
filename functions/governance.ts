@@ -3488,6 +3488,25 @@ server.addHandler({
     // ground truth rather than on the proposer's say-so.
     let draft: Awaited<ReturnType<typeof draftServiceRequestFor>> | null = null;
     if (verb === 'create') {
+      // NO TICKET AT ALL BEATS A BAD ONE.
+      //
+      // The fallback wording exists so the PREVIEW has something to show while
+      // the writer is still reading the call. It was never meant to reach the
+      // CMMS, and it did: the button is pressable the moment the panel renders,
+      // the writer takes ten to twenty seconds, and SR 210676 went out two
+      // seconds before its draft landed. A generic subject on a real work
+      // ticket is worse than no ticket — somebody has to find it and fix it,
+      // and until they do it misdescribes a fault to whoever picks it up.
+      //
+      // So the write refuses. Retryable, and it says so: the draft is on its
+      // way, and pressing again once it arrives works.
+      if (!srDraftOf(corr)) {
+        throw new Error(
+          'Not writing yet: the service request has not been written from the call. ' +
+            'The writer reads the whole transcript and takes a few seconds — wait for the ' +
+            'drafted subject and description to appear, then press again. Nothing was created.',
+        );
+      }
       // The record the agent claimed but never made. The site is REQUIRED by
       // create-service-request and is never invented — but it is looked for in
       // more than one place, because a live call carries no site_hint at all
@@ -3623,9 +3642,12 @@ server.addHandler({
           // The description used to assert "the agent confirmed this request to
           // the caller but no record existed". True for one case and false for
           // the rest: on a call that was cut, the agent confirmed nothing.
-          description: `${draft.description}${
-            corr.rationale ? `\n\nProposer's rationale: ${corr.rationale}` : ''
-          }`.slice(0, 2000),
+          //
+          // And nothing is appended to it. The proposer's rationale was still
+          // being tacked on here — reasoning about the AGENT, on a ticket about
+          // a fault, which is the governance meta this was supposed to have
+          // removed. The assembled description is the whole description.
+          description: draft.description.slice(0, 2000),
           // `site`, not `siteId` — the action's own description is explicit
           // that responses may echo it under siteId but the input key is site.
           site: { id: siteId },
@@ -4862,8 +4884,21 @@ server.addHandler({
     db.query('update deviations set root_cause=$2 where id=$1', [id, rootCause]);
 
     const corrId = `CO-${id}`;
-    const cmmsAction = JSON.stringify(p.cmmsAction ?? {});
-    const prior = db.query('select id from corrections where id = $1 limit 1', [corrId]).rows[0];
+    const prior = db.query('select id, cmms_action from corrections where id = $1 limit 1', [corrId])
+      .rows[0];
+
+    // THE PROPOSER MUST NOT WIPE THE WRITTEN TICKET.
+    //
+    // cmms_action is one JSON column carrying two different things: the
+    // proposer's suggested verb and fields, and the service-request-writer's
+    // subject and description. This wrote the proposer's object over the whole
+    // column, so a redraft silently deleted the ticket text — and the create
+    // that followed fell back to the generic wording. That is exactly how SR
+    // 210676 was written: the draft existed, the proposer ran, and it was gone.
+    const keptDraft = srDraftOf(prior);
+    const cmmsAction = JSON.stringify(
+      keptDraft ? { ...(p.cmmsAction ?? {}), srDraft: keptDraft } : (p.cmmsAction ?? {}),
+    );
 
     if (prior) {
       db.query(

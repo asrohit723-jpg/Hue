@@ -166,6 +166,11 @@ export function InterventionDetail({
   const drafted = useRef<string | null>(null);
   /** The SR narrative is written once per deviation, like the correction. */
   const srWritten = useRef<string | null>(null);
+  // The writer takes ten to twenty seconds. Until it lands there is nothing
+  // worth writing to a CMMS, so the button waits on this rather than the panel
+  // offering a create it would have to refuse.
+  const [srWriting, setSrWriting] = useState(false);
+  const [srError, setSrError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -336,6 +341,8 @@ export function InterventionDetail({
     if (cmmsDraft?.written || srWritten.current === dev.id) return;
     srWritten.current = dev.id;
     let cancelled = false;
+    setSrWriting(true);
+    setSrError(null);
     (async () => {
       try {
         await writeServiceRequest(dev.id);
@@ -347,10 +354,14 @@ export function InterventionDetail({
         });
         if (!cancelled) setCmmsDraft(fresh.cmmsDraft ?? null);
       } catch (err) {
-        // A writer that failed leaves the plain fallback in place, which is
-        // honest about not having been written. Allow a retry on reopen.
-        if (!cancelled) srWritten.current = null;
-        console.warn('service-request writer failed', err);
+        // A writer that failed must be VISIBLE and retryable. It used to warn to
+        // the console and leave the fallback wording in place, which is how a
+        // generic ticket reached the CMMS.
+        if (cancelled) return;
+        srWritten.current = null;
+        setSrError(err instanceof Error ? err.message : String(err));
+      } finally {
+        if (!cancelled) setSrWriting(false);
       }
     })();
     return () => { cancelled = true; };
@@ -837,6 +848,9 @@ export function InterventionDetail({
           rec={rec}
           plan={cmmsPlan}
           draft={cmmsDraft}
+          writing={srWriting}
+          writeError={srError}
+          onRewrite={() => { srWritten.current = null; setSrError(null); setCmmsDraft((d) => (d ? { ...d, written: false } : d)); }}
           busy={act.busy}
           act={act}
           onWrite={() =>
@@ -1490,6 +1504,9 @@ function FixTheRecord({
   rec,
   plan,
   draft,
+  writing,
+  writeError,
+  onRewrite,
   busy,
   act,
   onWrite,
@@ -1501,6 +1518,11 @@ function FixTheRecord({
   plan: { verb: string; recordId: string | null; reason: string } | null;
   /** The record this call should have produced, drafted from the call itself. */
   draft: CmmsDraft | null;
+  /** The writer is reading the call. Nothing may be created until it lands. */
+  writing: boolean;
+  /** The writer failed. Shown here, retryable, never written around. */
+  writeError: string | null;
+  onRewrite: () => void;
   busy: string | null;
   /** So a failed write is visible HERE, next to the button that caused it. */
   act: ActionState;
@@ -1525,6 +1547,11 @@ function FixTheRecord({
   // A create that cannot run yet, and exactly which detail is missing. Named
   // rather than left to a button that does nothing when pressed.
   const blocked = verb === 'create' && draft ? draft.missing : [];
+  // A create with no written narrative is refused by the server, so the button
+  // must not offer it. This is the gap SR 210676 went through: the panel
+  // rendered, the button was live, and the writer was still reading the call.
+  const notWritten = verb === 'create' && Boolean(draft) && !draft?.written;
+  const holdWrite = blocked.length > 0 || notWritten || Boolean(writeError);
   const applied = corr?.state === 'applied' || corr?.state === 'verifying' || corr?.state === 'resolved';
 
   return (
@@ -1694,6 +1721,57 @@ function FixTheRecord({
           </div>
         ) : null}
 
+        {/* The writer is reading the call. The button stays down until it
+            lands, because the server refuses a create without it — and because
+            a ticket written from the fallback wording is the thing this whole
+            path exists to stop. */}
+        {notWritten && !writeError && !applied ? (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 9,
+              fontSize: 12,
+              lineHeight: '18px',
+              color: 'var(--ink-600)',
+              background: 'var(--ink-050)',
+              border: '1px solid var(--border-default)',
+              borderRadius: 'var(--radius-sm)',
+              padding: '9px 11px',
+            }}
+          >
+            {writing ? <span className="hue-spinner" aria-hidden="true" /> : null}
+            <span>
+              Writing the request from the call — the whole transcript is read, which takes a few
+              seconds. The subject and description below fill in when it lands.
+            </span>
+          </div>
+        ) : null}
+
+        {/* The writer failed. Named, and retryable. Nothing generic gets
+            written in the meantime. */}
+        {writeError && !applied ? (
+          <div
+            style={{
+              fontSize: 12,
+              lineHeight: '18px',
+              color: 'var(--danger-700)',
+              background: 'var(--danger-050)',
+              border: '1px solid var(--danger-500)',
+              borderRadius: 'var(--radius-sm)',
+              padding: '9px 11px',
+            }}
+          >
+            <b style={{ fontWeight: 600 }}>The request could not be written from the call.</b>{' '}
+            {writeError}
+            <div style={{ marginTop: 8 }}>
+              <button className="hue-btn" onClick={onRewrite} style={secondaryBtn}>
+                Try writing it again
+              </button>
+            </div>
+          </div>
+        ) : null}
+
         {/* A create that cannot run, and the reason, BEFORE the press. The
             write refuses to guess a site, so without this the only way to learn
             what was missing was to press the button and read the failure. */}
@@ -1725,18 +1803,18 @@ function FixTheRecord({
           <button
             className="hue-btn"
             onClick={onWrite}
-            disabled={Boolean(busy) || applied || blocked.length > 0}
+            disabled={Boolean(busy) || applied || holdWrite}
             aria-busy={busy === 'approve'}
             title={plan?.reason}
             style={{
               height: 38,
               borderRadius: 'var(--radius-sm)',
-              border: `1px solid ${applied || blocked.length ? 'var(--border-default)' : 'var(--warning-500)'}`,
-              background: applied || blocked.length ? 'var(--ink-050)' : 'var(--warning-500)',
-              color: applied || blocked.length ? 'var(--ink-500)' : 'var(--surface-card)',
+              border: `1px solid ${applied || holdWrite ? 'var(--border-default)' : 'var(--warning-500)'}`,
+              background: applied || holdWrite ? 'var(--ink-050)' : 'var(--warning-500)',
+              color: applied || holdWrite ? 'var(--ink-500)' : 'var(--surface-card)',
               fontWeight: 600,
               fontSize: 13,
-              cursor: busy || applied || blocked.length ? 'not-allowed' : 'pointer',
+              cursor: busy || applied || holdWrite ? 'not-allowed' : 'pointer',
               display: 'inline-flex',
               alignItems: 'center',
               justifyContent: 'center',
